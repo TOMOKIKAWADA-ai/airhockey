@@ -472,7 +472,7 @@ function connectToRoom(roomId) {
   if (!wsUrl) {
     client.status = 'disconnected';
     client.error = 'WebSocket URL is not configured';
-    setUiMessage('Set VITE_WS_URL for deployed play.');
+    setUiMessage('Deploy the WebSocket server, then set VITE_WS_URL on Vercel.');
     return;
   }
 

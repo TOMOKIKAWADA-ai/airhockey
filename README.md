@@ -99,6 +99,8 @@ VercelのProject Settingsで以下を設定します。
 
 Render/Railway/Fly.ioなど、常時起動のNode.jsサービスに置いてください。
 
+このrepoにはRender用の [render.yaml](render.yaml) を入れています。RenderでGitHub repoをBlueprintとして作成すると、`npm run server` でWebSocketサーバーを起動できます。
+
 基本設定:
 
 - Start command: `npm run server`
@@ -115,6 +117,22 @@ Environment:
 ```
 
 Renderでは外部URLが `https://...` になるので、Vercelの `VITE_WS_URL` には `wss://...` を指定します。
+
+例:
+
+```text
+Render server URL: https://airhockey-ws.onrender.com
+Vercel VITE_WS_URL: wss://airhockey-ws.onrender.com
+```
+
+Vercel CLIで設定する場合:
+
+```bash
+npx vercel env add VITE_WS_URL production
+npx vercel --prod
+```
+
+現在のVercel画面で `WebSocket URL is not configured` と出る場合は、まだ `VITE_WS_URL` が設定されていません。WebSocketサーバーを先にデプロイし、その `wss://...` URLをVercelの環境変数に入れてから再デプロイしてください。
 
 ## 調整しやすい数値
 
