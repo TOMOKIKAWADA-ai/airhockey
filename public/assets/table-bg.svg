@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-label="Bright air hockey table background">
+  <defs>
+    <linearGradient id="table" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#1aa0b3"/>
+      <stop offset="0.5" stop-color="#0b6f8f"/>
+      <stop offset="1" stop-color="#104a68"/>
+    </linearGradient>
+    <radialGradient id="glowTop" cx="50%" cy="12%" r="55%">
+      <stop offset="0" stop-color="#7ef7ff" stop-opacity="0.36"/>
+      <stop offset="1" stop-color="#7ef7ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowBottom" cx="50%" cy="88%" r="55%">
+      <stop offset="0" stop-color="#ffd166" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#ffd166" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.4" fill="#ffffff" opacity="0.08"/>
+    </pattern>
+  </defs>
+
+  <rect width="960" height="540" fill="url(#table)"/>
+  <rect width="960" height="540" fill="url(#glowTop)"/>
+  <rect width="960" height="540" fill="url(#glowBottom)"/>
+  <rect width="960" height="540" fill="url(#dots)"/>
+
+  <rect x="28" y="28" width="904" height="484" rx="30" fill="none" stroke="#bfffff" stroke-width="8" opacity="0.28"/>
+  <rect x="38" y="38" width="884" height="464" rx="24" fill="none" stroke="#1ee8f0" stroke-width="3" opacity="0.38"/>
+
+  <line x1="48" y1="270" x2="912" y2="270" stroke="#eaffff" stroke-width="4" opacity="0.42"/>
+  <circle cx="480" cy="270" r="78" fill="none" stroke="#eaffff" stroke-width="5" opacity="0.28"/>
+  <circle cx="480" cy="270" r="12" fill="none" stroke="#eaffff" stroke-width="4" opacity="0.28"/>
+
+  <path d="M350 31 H610 Q624 31 628 45 L632 58 H328 L332 45 Q336 31 350 31Z" fill="#ffd166" opacity="0.74"/>
+  <path d="M350 481 H610 Q624 481 628 495 L632 508 H328 L332 495 Q336 481 350 481Z" fill="#ffd166" opacity="0.74"/>
+  <path d="M374 48 H586" stroke="#fff1b8" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+  <path d="M374 492 H586" stroke="#fff1b8" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+
+  <path d="M60 88 C180 34 260 44 344 86" fill="none" stroke="#92f8ff" stroke-width="12" opacity="0.08" stroke-linecap="round"/>
+  <path d="M616 454 C742 512 818 492 900 426" fill="none" stroke="#fff1b8" stroke-width="12" opacity="0.08" stroke-linecap="round"/>
+</svg>
