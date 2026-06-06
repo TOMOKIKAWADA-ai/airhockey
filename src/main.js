@@ -1,28 +1,6 @@
 import Phaser from 'phaser';
+import { GAME, MESSAGE_TYPES, TUNING } from './shared/constants.js';
 import './styles.css';
-
-const GAME = {
-  width: 960,
-  height: 540,
-  winScore: 5,
-  goalDelayMs: 900,
-};
-
-const TUNING = {
-  paddleRadius: 33,
-  paddleSpeed: 360,
-  puckRadius: 17,
-  puckStartSpeed: 270,
-  puckMaxSpeed: 760,
-  puckFrictionPerSecond: 0.985,
-  normalHitBoost: 1.035,
-  powerHitMultiplier: 1.45,
-  powerHitWindowMs: 150,
-  powerHitCooldownMs: 400,
-  minAxisVelocity: 70,
-  goalWidth: 260,
-  centerFence: 18,
-};
 
 const COLORS = {
   table: 0x123f56,
@@ -40,79 +18,56 @@ const COLORS = {
   warning: '#ffd166',
 };
 
-class Paddle {
-  constructor(scene, id, x, y, color, darkColor, controls, limit) {
+const ROLE_LABELS = {
+  p1: 'Player 1 / Bottom',
+  p2: 'Player 2 / Top',
+  spectator: 'Spectator',
+  none: 'Not joined',
+};
+
+const client = {
+  ws: null,
+  roomId: '',
+  role: 'none',
+  connected: false,
+  status: 'not-connected',
+  lastState: null,
+  lastInput: null,
+  lastInputSentAt: 0,
+  seenEvents: new Set(),
+  error: '',
+};
+
+const ui = createRoomUi();
+
+class PaddleVisual {
+  constructor(scene, color, darkColor) {
     this.scene = scene;
-    this.id = id;
-    this.x = x;
-    this.y = y;
-    this.prevX = x;
-    this.prevY = y;
-    this.vx = 0;
-    this.vy = 0;
     this.color = color;
     this.darkColor = darkColor;
-    this.controls = controls;
-    this.limit = limit;
-    this.lastPowerPressedAt = -Infinity;
-    this.lastPowerUsedAt = -Infinity;
+    this.x = GAME.width / 2;
+    this.y = GAME.height / 2;
     this.flashUntil = 0;
-
-    this.shadow = scene.add.circle(x + 4, y + 5, TUNING.paddleRadius, 0x000000, 0.22);
-    this.body = scene.add.circle(x, y, TUNING.paddleRadius, color, 1);
-    this.inner = scene.add.circle(x, y, TUNING.paddleRadius * 0.54, darkColor, 0.86);
-    this.ring = scene.add.circle(x, y, TUNING.paddleRadius + 4, color, 0);
+    this.shadow = scene.add.circle(this.x + 4, this.y + 5, TUNING.paddleRadius, 0x000000, 0.22);
+    this.body = scene.add.circle(this.x, this.y, TUNING.paddleRadius, color, 1);
+    this.inner = scene.add.circle(this.x, this.y, TUNING.paddleRadius * 0.54, darkColor, 0.86);
+    this.ring = scene.add.circle(this.x, this.y, TUNING.paddleRadius + 4, color, 0);
     this.ring.setStrokeStyle(4, color, 0);
   }
 
-  update(deltaMs, nowMs) {
-    this.prevX = this.x;
-    this.prevY = this.y;
-
-    const seconds = deltaMs / 1000;
-    let ix = 0;
-    let iy = 0;
-    if (this.controls.left.isDown) ix -= 1;
-    if (this.controls.right.isDown) ix += 1;
-    if (this.controls.up.isDown) iy -= 1;
-    if (this.controls.down.isDown) iy += 1;
-
-    if (ix !== 0 || iy !== 0) {
-      const length = Math.hypot(ix, iy);
-      ix /= length;
-      iy /= length;
+  setTarget(x, y, immediate = false) {
+    if (immediate) {
+      this.x = x;
+      this.y = y;
+      return;
     }
-
-    this.x += ix * TUNING.paddleSpeed * seconds;
-    this.y += iy * TUNING.paddleSpeed * seconds;
-    this.x = Phaser.Math.Clamp(this.x, TUNING.paddleRadius, GAME.width - TUNING.paddleRadius);
-    this.y = Phaser.Math.Clamp(this.y, this.limit.minY, this.limit.maxY);
-
-    this.vx = (this.x - this.prevX) / Math.max(seconds, 0.001);
-    this.vy = (this.y - this.prevY) / Math.max(seconds, 0.001);
-
-    if (Phaser.Input.Keyboard.JustDown(this.controls.power)) {
-      this.lastPowerPressedAt = nowMs;
-      this.pulse(0.38);
-    }
-
-    this.render(nowMs);
+    this.x += (x - this.x) * 0.45;
+    this.y += (y - this.y) * 0.45;
   }
 
-  canPowerHit(nowMs) {
-    const pressedRecently = nowMs - this.lastPowerPressedAt <= TUNING.powerHitWindowMs;
-    const cooledDown = nowMs - this.lastPowerUsedAt >= TUNING.powerHitCooldownMs;
-    return pressedRecently && cooledDown;
-  }
-
-  consumePowerHit(nowMs) {
-    this.lastPowerUsedAt = nowMs;
-    this.flashUntil = nowMs + 150;
-    this.pulse(0.95);
-  }
-
-  pulse(alpha) {
-    this.ring.setAlpha(alpha);
+  flash(nowMs) {
+    this.flashUntil = nowMs + 170;
+    this.ring.setAlpha(0.95);
   }
 
   render(nowMs) {
@@ -126,24 +81,11 @@ class Paddle {
     this.ring.setPosition(this.x, this.y).setScale(scale).setAlpha(ringAlpha);
     this.ring.setStrokeStyle(4, isFlashing ? 0xffffff : this.color, ringAlpha);
   }
-
-  reset(x, y) {
-    this.x = x;
-    this.y = y;
-    this.prevX = x;
-    this.prevY = y;
-    this.vx = 0;
-    this.vy = 0;
-    this.lastPowerPressedAt = -Infinity;
-    this.lastPowerUsedAt = -Infinity;
-    this.flashUntil = 0;
-    this.render(0);
-  }
 }
 
-class AirHockeyScene extends Phaser.Scene {
+class AirHockeyOnlineScene extends Phaser.Scene {
   constructor() {
-    super('AirHockeyScene');
+    super('AirHockeyOnlineScene');
   }
 
   preload() {
@@ -151,32 +93,29 @@ class AirHockeyScene extends Phaser.Scene {
   }
 
   create() {
-    this.debugState = {
-      p1PowerHits: 0,
-      p2PowerHits: 0,
-      p1Goals: 0,
-      p2Goals: 0,
-      paddleHits: 0,
-      wallHits: 0,
-      winner: '',
-    };
-
-    this.goalTop = { x: (GAME.width - TUNING.goalWidth) / 2, y: -8, width: TUNING.goalWidth, height: 24 };
-    this.goalBottom = { x: (GAME.width - TUNING.goalWidth) / 2, y: GAME.height - 16, width: TUNING.goalWidth, height: 24 };
-
     this.createTable();
     this.createTexts();
     this.createControls();
     this.createPaddles();
     this.createPuck();
+    this.displayState = createDisplayState();
 
-    this.score = { p1: 0, p2: 0 };
-    this.gameOver = false;
-    this.pausedForGoal = false;
-    this.restartKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
-    this.input.keyboard.on('keydown-R', () => this.restartMatch());
-    this.resetRound(Phaser.Math.RND.pick([-1, 1]));
-    this.installTestHooks();
+    this.input.keyboard.on('keydown-R', () => {
+      if (client.role === 'p1' || client.role === 'p2') {
+        sendMessage({ type: MESSAGE_TYPES.restart });
+      }
+    });
+
+    window.__AIR_HOCKEY_CLIENT_STATE__ = () => ({
+      roomId: client.roomId,
+      role: client.role,
+      connected: client.connected,
+      status: client.status,
+      lastState: client.lastState,
+      error: client.error,
+    });
+
+    autoJoinFromUrl();
   }
 
   createTable() {
@@ -187,6 +126,9 @@ class AirHockeyScene extends Phaser.Scene {
       texture.setDisplaySize(GAME.width, GAME.height);
       texture.setAlpha(0.36);
     }
+
+    const goalTop = { x: (GAME.width - TUNING.goalWidth) / 2, width: TUNING.goalWidth };
+    const goalBottom = { x: (GAME.width - TUNING.goalWidth) / 2, width: TUNING.goalWidth };
 
     this.field = this.add.graphics();
     this.field.fillStyle(COLORS.tableDark, 1);
@@ -200,12 +142,12 @@ class AirHockeyScene extends Phaser.Scene {
     this.field.strokeCircle(GAME.width / 2, GAME.height / 2, 8);
 
     this.field.fillStyle(COLORS.goal, 0.95);
-    this.field.fillRoundedRect(this.goalTop.x, 20, this.goalTop.width, 14, 7);
-    this.field.fillRoundedRect(this.goalBottom.x, GAME.height - 34, this.goalBottom.width, 14, 7);
+    this.field.fillRoundedRect(goalTop.x, 20, goalTop.width, 14, 7);
+    this.field.fillRoundedRect(goalBottom.x, GAME.height - 34, goalBottom.width, 14, 7);
 
     this.field.lineStyle(5, COLORS.goal, 0.85);
-    this.field.lineBetween(this.goalTop.x, 20, this.goalTop.x + this.goalTop.width, 20);
-    this.field.lineBetween(this.goalBottom.x, GAME.height - 20, this.goalBottom.x + this.goalBottom.width, GAME.height - 20);
+    this.field.lineBetween(goalTop.x, 20, goalTop.x + goalTop.width, 20);
+    this.field.lineBetween(goalBottom.x, GAME.height - 20, goalBottom.x + goalBottom.width, GAME.height - 20);
 
     this.add.text(GAME.width / 2, 45, 'P1 SCORES', {
       color: '#ffe8a3',
@@ -233,23 +175,37 @@ class AirHockeyScene extends Phaser.Scene {
       lineSpacing: 4,
     }).setOrigin(0, 0.5);
 
-    this.stateText = this.add.text(GAME.width / 2, GAME.height / 2 + 112, '', {
+    this.roleText = this.add.text(GAME.width - 46, 44, 'Not joined', {
+      color: COLORS.mutedText,
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '15px',
+      fontStyle: 'bold',
+      align: 'right',
+    }).setOrigin(1, 0);
+
+    this.roomText = this.add.text(46, 40, '', {
+      color: COLORS.mutedText,
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '14px',
+    }).setOrigin(0, 0);
+
+    this.stateText = this.add.text(GAME.width / 2, GAME.height / 2 + 112, 'Create or join a room', {
       color: COLORS.warning,
       fontFamily: 'Arial, sans-serif',
-      fontSize: '28px',
+      fontSize: '26px',
       fontStyle: 'bold',
       stroke: '#05212d',
       strokeThickness: 5,
       align: 'center',
     }).setOrigin(0.5);
 
-    this.helpP1Text = this.add.text(46, GAME.height - 13, 'P1: WASD + Shift', {
+    this.helpP1Text = this.add.text(46, GAME.height - 13, 'Move: WASD / Arrow keys   Power: Shift / Space', {
       color: COLORS.mutedText,
       fontFamily: 'Arial, sans-serif',
       fontSize: '14px',
     }).setOrigin(0, 1);
 
-    this.helpP2Text = this.add.text(GAME.width - 46, GAME.height - 13, 'P2: Arrow keys + Space   R: Restart', {
+    this.helpP2Text = this.add.text(GAME.width - 46, GAME.height - 13, 'R: Restart request', {
       color: COLORS.mutedText,
       fontFamily: 'Arial, sans-serif',
       fontSize: '14px',
@@ -272,48 +228,10 @@ class AirHockeyScene extends Phaser.Scene {
   }
 
   createPaddles() {
-    this.p1Start = { x: GAME.width / 2, y: GAME.height - 120 };
-    this.p2Start = { x: GAME.width / 2, y: 120 };
-
-    this.p1 = new Paddle(
-      this,
-      'p1',
-      this.p1Start.x,
-      this.p1Start.y,
-      COLORS.p1,
-      COLORS.p1Dark,
-      {
-        up: this.keys.w,
-        left: this.keys.a,
-        down: this.keys.s,
-        right: this.keys.d,
-        power: this.keys.shift,
-      },
-      {
-        minY: GAME.height / 2 + TUNING.centerFence + TUNING.paddleRadius,
-        maxY: GAME.height - 34 - TUNING.paddleRadius,
-      },
-    );
-
-    this.p2 = new Paddle(
-      this,
-      'p2',
-      this.p2Start.x,
-      this.p2Start.y,
-      COLORS.p2,
-      COLORS.p2Dark,
-      {
-        up: this.keys.up,
-        left: this.keys.left,
-        down: this.keys.down,
-        right: this.keys.right,
-        power: this.keys.space,
-      },
-      {
-        minY: 34 + TUNING.paddleRadius,
-        maxY: GAME.height / 2 - TUNING.centerFence - TUNING.paddleRadius,
-      },
-    );
+    this.paddles = {
+      p1: new PaddleVisual(this, COLORS.p1, COLORS.p1Dark),
+      p2: new PaddleVisual(this, COLORS.p2, COLORS.p2Dark),
+    };
   }
 
   createPuck() {
@@ -323,228 +241,79 @@ class AirHockeyScene extends Phaser.Scene {
     this.puckShadow = this.add.circle(GAME.width / 2 + 3, GAME.height / 2 + 4, TUNING.puckRadius, 0x000000, 0.24);
     this.puck = this.add.circle(GAME.width / 2, GAME.height / 2, TUNING.puckRadius, COLORS.puck, 1);
     this.puck.setStrokeStyle(4, COLORS.puckShadow, 0.9);
-    this.puckVel = new Phaser.Math.Vector2();
-    this.puckPos = new Phaser.Math.Vector2(GAME.width / 2, GAME.height / 2);
     this.lastPuckPositions = [];
-    this.lastHitRingAt = -Infinity;
+    this.lastHitRing = { at: -Infinity, x: GAME.width / 2, y: GAME.height / 2 };
   }
 
-  update(time, delta) {
-    if (Phaser.Input.Keyboard.JustDown(this.restartKey)) {
-      this.restartMatch();
-      return;
-    }
-
-    this.p1.update(delta, time);
-    this.p2.update(delta, time);
-
-    if (!this.pausedForGoal && !this.gameOver) {
-      this.updatePuck(delta, time);
-    }
-
+  update(time) {
+    this.sendInput(time);
+    this.consumeServerState(time);
+    this.renderPaddles(time);
     this.renderPuck(time);
     this.updateTexts();
   }
 
-  updatePuck(deltaMs, nowMs) {
-    const seconds = deltaMs / 1000;
-    this.puckPos.x += this.puckVel.x * seconds;
-    this.puckPos.y += this.puckVel.y * seconds;
-    this.puckVel.scale(Math.pow(TUNING.puckFrictionPerSecond, seconds));
-
-    this.resolveWallCollisions();
-    this.resolvePaddleCollision(this.p1, nowMs);
-    this.resolvePaddleCollision(this.p2, nowMs);
-    this.correctAxisLock();
-    this.capPuckSpeed();
-    this.checkGoal();
-  }
-
-  resolveWallCollisions() {
-    const r = TUNING.puckRadius;
-    const left = 24 + r;
-    const right = GAME.width - 24 - r;
-    const topWall = 20 + r;
-    const bottomWall = GAME.height - 20 - r;
-
-    if (this.puckPos.x < left) {
-      this.puckPos.x = left;
-      this.puckVel.x = Math.abs(this.puckVel.x);
-      this.debugState.wallHits += 1;
-    } else if (this.puckPos.x > right) {
-      this.puckPos.x = right;
-      this.puckVel.x = -Math.abs(this.puckVel.x);
-      this.debugState.wallHits += 1;
-    }
-
-    const inGoal = this.isPuckInGoalLane();
-    if (!inGoal && this.puckPos.y < topWall) {
-      this.puckPos.y = topWall;
-      this.puckVel.y = Math.abs(this.puckVel.y);
-      this.debugState.wallHits += 1;
-    } else if (!inGoal && this.puckPos.y > bottomWall) {
-      this.puckPos.y = bottomWall;
-      this.puckVel.y = -Math.abs(this.puckVel.y);
-      this.debugState.wallHits += 1;
-    }
-  }
-
-  resolvePaddleCollision(paddle, nowMs) {
-    const dx = this.puckPos.x - paddle.x;
-    const dy = this.puckPos.y - paddle.y;
-    const minDistance = TUNING.puckRadius + TUNING.paddleRadius;
-    const distance = Math.hypot(dx, dy);
-
-    if (distance <= 0 || distance >= minDistance) return;
-
-    const nx = dx / distance;
-    const ny = dy / distance;
-    this.puckPos.x = paddle.x + nx * minDistance;
-    this.puckPos.y = paddle.y + ny * minDistance;
-
-    const incoming = this.puckVel.dot(new Phaser.Math.Vector2(nx, ny));
-    if (incoming < 0) {
-      this.puckVel.x -= 2 * incoming * nx;
-      this.puckVel.y -= 2 * incoming * ny;
-    }
-
-    this.puckVel.x += paddle.vx * 0.44;
-    this.puckVel.y += paddle.vy * 0.44;
-
-    const powerHit = paddle.canPowerHit(nowMs);
-    const boost = powerHit ? TUNING.powerHitMultiplier : TUNING.normalHitBoost;
-    this.puckVel.scale(boost);
-
-    if (powerHit) {
-      paddle.consumePowerHit(nowMs);
-      this.lastHitRingAt = nowMs;
-      this.hitRing.setPosition(this.puckPos.x, this.puckPos.y);
-      this.hitRing.setAlpha(1);
-      this.cameras.main.shake(90, 0.006);
-      if (paddle.id === 'p1') this.debugState.p1PowerHits += 1;
-      if (paddle.id === 'p2') this.debugState.p2PowerHits += 1;
-    }
-
-    this.debugState.paddleHits += 1;
-    this.correctAxisLock();
-    this.capPuckSpeed();
-  }
-
-  isPuckInGoalLane() {
-    const centerX = GAME.width / 2;
-    return Math.abs(this.puckPos.x - centerX) <= TUNING.goalWidth / 2 - TUNING.puckRadius * 0.25;
-  }
-
-  checkGoal() {
-    if (!this.isPuckInGoalLane()) return;
-
-    if (this.puckPos.y < -TUNING.puckRadius) {
-      this.awardPoint('p1');
-    } else if (this.puckPos.y > GAME.height + TUNING.puckRadius) {
-      this.awardPoint('p2');
-    }
-  }
-
-  awardPoint(playerId) {
-    if (this.pausedForGoal || this.gameOver) return;
-
-    if (playerId === 'p1') {
-      this.score.p1 += 1;
-      this.debugState.p1Goals += 1;
-    } else {
-      this.score.p2 += 1;
-      this.debugState.p2Goals += 1;
-    }
-
-    this.pausedForGoal = true;
-    this.puckVel.set(0, 0);
-    this.stateText.setText(`${playerId.toUpperCase()} SCORED`);
-
-    const winner = this.score.p1 >= GAME.winScore ? 'Player 1' : this.score.p2 >= GAME.winScore ? 'Player 2' : '';
-    if (winner) {
-      this.finishMatch(winner);
-      return;
-    }
-
-    this.time.delayedCall(GAME.goalDelayMs, () => {
-      this.pausedForGoal = false;
-      this.resetRound(playerId === 'p1' ? -1 : 1);
-    });
-  }
-
-  finishMatch(winner) {
-    this.gameOver = true;
-    this.pausedForGoal = false;
-    this.debugState.winner = winner;
-    this.stateText.setText(`${winner} Wins!\nPress R`);
-  }
-
-  resetRound(directionY) {
-    this.p1.reset(this.p1Start.x, this.p1Start.y);
-    this.p2.reset(this.p2Start.x, this.p2Start.y);
-    this.puckPos.set(GAME.width / 2, GAME.height / 2);
-
-    const angle = Phaser.Math.DegToRad(Phaser.Math.Between(58, 122)) * directionY;
-    const side = Phaser.Math.RND.pick([-1, 1]);
-    this.puckVel.set(Math.cos(angle) * TUNING.puckStartSpeed * side, Math.sin(angle) * TUNING.puckStartSpeed);
-    this.correctAxisLock();
-    this.lastPuckPositions = [];
-    this.stateText.setText('');
-  }
-
-  restartMatch() {
-    this.score = { p1: 0, p2: 0 };
-    this.gameOver = false;
-    this.pausedForGoal = false;
-    this.debugState.p1PowerHits = 0;
-    this.debugState.p2PowerHits = 0;
-    this.debugState.p1Goals = 0;
-    this.debugState.p2Goals = 0;
-    this.debugState.paddleHits = 0;
-    this.debugState.wallHits = 0;
-    this.debugState.winner = '';
-    this.resetRound(Phaser.Math.RND.pick([-1, 1]));
-  }
-
-  installTestHooks() {
-    window.__AIR_HOCKEY_TEST__ = {
-      placePuck: (x, y, vx, vy) => {
-        this.pausedForGoal = false;
-        if (!this.gameOver) this.stateText.setText('');
-        this.puckPos.set(x, y);
-        this.puckVel.set(vx, vy);
-      },
-      setScore: (p1, p2) => {
-        this.score.p1 = p1;
-        this.score.p2 = p2;
-      },
-      getState: () => window.__AIR_HOCKEY_STATE__,
+  sendInput(nowMs) {
+    if (!client.connected || (client.role !== 'p1' && client.role !== 'p2')) return;
+    const input = {
+      up: this.keys.w.isDown || this.keys.up.isDown,
+      down: this.keys.s.isDown || this.keys.down.isDown,
+      left: this.keys.a.isDown || this.keys.left.isDown,
+      right: this.keys.d.isDown || this.keys.right.isDown,
+      power: this.keys.shift.isDown || this.keys.space.isDown,
     };
+
+    const changed = !client.lastInput || Object.keys(input).some((key) => input[key] !== client.lastInput[key]);
+    if (changed || nowMs - client.lastInputSentAt > 50) {
+      client.lastInput = input;
+      client.lastInputSentAt = nowMs;
+      sendMessage({ type: MESSAGE_TYPES.input, input });
+    }
   }
 
-  correctAxisLock() {
-    const speed = this.puckVel.length();
-    if (speed < 1) return;
+  consumeServerState(nowMs) {
+    const state = client.lastState;
+    if (!state) return;
 
-    if (Math.abs(this.puckVel.x) < TUNING.minAxisVelocity) {
-      this.puckVel.x = Math.sign(this.puckVel.x || Phaser.Math.RND.pick([-1, 1])) * TUNING.minAxisVelocity;
-    }
-    if (Math.abs(this.puckVel.y) < TUNING.minAxisVelocity) {
-      this.puckVel.y = Math.sign(this.puckVel.y || Phaser.Math.RND.pick([-1, 1])) * TUNING.minAxisVelocity;
+    if (!this.displayState.initialized) {
+      this.displayState = createDisplayState(state);
     }
 
-    this.puckVel.setLength(Math.max(speed, TUNING.puckStartSpeed * 0.7));
+    for (const id of ['p1', 'p2']) {
+      this.displayState.players[id].x += (state.players[id].x - this.displayState.players[id].x) * 0.45;
+      this.displayState.players[id].y += (state.players[id].y - this.displayState.players[id].y) * 0.45;
+    }
+    this.displayState.puck.x += (state.puck.x - this.displayState.puck.x) * 0.5;
+    this.displayState.puck.y += (state.puck.y - this.displayState.puck.y) * 0.5;
+
+    for (const event of state.events || []) {
+      if (client.seenEvents.has(event.id)) continue;
+      client.seenEvents.add(event.id);
+      if (event.type === 'powerHit') {
+        this.paddles[event.player]?.flash(nowMs);
+        this.lastHitRing = { at: nowMs, x: event.x, y: event.y };
+        this.cameras.main.shake(90, 0.006);
+      }
+      if (event.type === 'goal') {
+        this.cameras.main.shake(80, 0.004);
+      }
+      if (client.seenEvents.size > 200) {
+        client.seenEvents = new Set([...client.seenEvents].slice(-120));
+      }
+    }
   }
 
-  capPuckSpeed() {
-    const speed = this.puckVel.length();
-    if (speed > TUNING.puckMaxSpeed) {
-      this.puckVel.setLength(TUNING.puckMaxSpeed);
+  renderPaddles(nowMs) {
+    for (const id of ['p1', 'p2']) {
+      const target = this.displayState.players[id];
+      this.paddles[id].setTarget(target.x, target.y, !this.displayState.initialized);
+      this.paddles[id].render(nowMs);
     }
   }
 
   renderPuck(nowMs) {
-    this.lastPuckPositions.push({ x: this.puckPos.x, y: this.puckPos.y });
+    const puck = this.displayState.puck;
+    this.lastPuckPositions.push({ x: puck.x, y: puck.y });
     if (this.lastPuckPositions.length > 9) this.lastPuckPositions.shift();
 
     this.puckTrail.clear();
@@ -554,13 +323,13 @@ class AirHockeyScene extends Phaser.Scene {
       this.puckTrail.fillCircle(p.x, p.y, TUNING.puckRadius * alpha);
     });
 
-    this.puckShadow.setPosition(this.puckPos.x + 3, this.puckPos.y + 4);
-    this.puck.setPosition(this.puckPos.x, this.puckPos.y);
+    this.puckShadow.setPosition(puck.x + 3, puck.y + 4);
+    this.puck.setPosition(puck.x, puck.y);
 
-    const ringAge = nowMs - this.lastHitRingAt;
+    const ringAge = nowMs - this.lastHitRing.at;
     if (ringAge < 190) {
       const t = ringAge / 190;
-      this.hitRing.setPosition(this.puckPos.x, this.puckPos.y);
+      this.hitRing.setPosition(this.lastHitRing.x, this.lastHitRing.y);
       this.hitRing.setRadius(TUNING.puckRadius + 12 + t * 22);
       this.hitRing.setStrokeStyle(4, 0xffffff, 1 - t);
       this.hitRing.setAlpha(1 - t);
@@ -570,23 +339,253 @@ class AirHockeyScene extends Phaser.Scene {
   }
 
   updateTexts() {
-    this.scoreText.setText(`P2 ${this.score.p2}\nP1 ${this.score.p1}`);
-    window.__AIR_HOCKEY_STATE__ = {
-      p1: { x: Math.round(this.p1.x), y: Math.round(this.p1.y) },
-      p2: { x: Math.round(this.p2.x), y: Math.round(this.p2.y) },
-      puck: {
-        x: Math.round(this.puckPos.x),
-        y: Math.round(this.puckPos.y),
-        vx: Math.round(this.puckVel.x),
-        vy: Math.round(this.puckVel.y),
-        speed: Math.round(this.puckVel.length()),
-      },
-      score: { ...this.score },
-      pausedForGoal: this.pausedForGoal,
-      gameOver: this.gameOver,
-      debug: { ...this.debugState },
-    };
+    const state = client.lastState;
+    const score = state?.score || { p1: 0, p2: 0 };
+    this.scoreText.setText(`P2 ${score.p2}\nP1 ${score.p1}`);
+    this.roleText.setText(`${ROLE_LABELS[client.role] || ROLE_LABELS.none}\n${connectionLabel()}`);
+    this.roomText.setText(client.roomId ? `Room: ${client.roomId}` : '');
+
+    let message = 'Create or join a room';
+    if (client.error) {
+      message = client.error;
+    } else if (client.status === 'connecting') {
+      message = 'Connecting...';
+    } else if (client.status === 'disconnected') {
+      message = 'Disconnected';
+    } else if (state?.winner) {
+      message = `${ROLE_LABELS[state.winner].split(' / ')[0]} Wins!\nPress R to restart`;
+    } else if (state?.statusText) {
+      message = state.statusText;
+    } else if (client.role === 'spectator') {
+      message = 'Spectating';
+    } else if (client.role === 'p1' || client.role === 'p2') {
+      message = 'Online match';
+    }
+    this.stateText.setText(message);
   }
+}
+
+function createDisplayState(state = null) {
+  return {
+    initialized: Boolean(state),
+    players: {
+      p1: {
+        x: state?.players?.p1?.x ?? GAME.width / 2,
+        y: state?.players?.p1?.y ?? GAME.height - 120,
+      },
+      p2: {
+        x: state?.players?.p2?.x ?? GAME.width / 2,
+        y: state?.players?.p2?.y ?? 120,
+      },
+    },
+    puck: {
+      x: state?.puck?.x ?? GAME.width / 2,
+      y: state?.puck?.y ?? GAME.height / 2,
+    },
+  };
+}
+
+function createRoomUi() {
+  const overlay = document.createElement('section');
+  overlay.className = 'room-panel';
+  overlay.innerHTML = `
+    <div class="room-panel__row">
+      <button type="button" data-action="create">Create room</button>
+      <input type="text" data-room-input placeholder="Room ID" maxlength="32" />
+      <button type="button" data-action="join">Join</button>
+    </div>
+    <div class="room-panel__share" data-share hidden>
+      <span data-share-url></span>
+      <button type="button" data-action="copy">Copy URL</button>
+    </div>
+    <div class="room-panel__message" data-message></div>
+  `;
+  document.body.appendChild(overlay);
+
+  const roomInput = overlay.querySelector('[data-room-input]');
+  const share = overlay.querySelector('[data-share]');
+  const shareUrl = overlay.querySelector('[data-share-url]');
+  const message = overlay.querySelector('[data-message]');
+
+  overlay.querySelector('[data-action="create"]').addEventListener('click', () => {
+    const roomId = createRoomId();
+    roomInput.value = roomId;
+    setRoomInUrl(roomId);
+    connectToRoom(roomId);
+  });
+
+  overlay.querySelector('[data-action="join"]').addEventListener('click', () => {
+    const roomId = sanitizeRoomId(roomInput.value);
+    if (!roomId) {
+      setUiMessage('Enter a room ID');
+      return;
+    }
+    setRoomInUrl(roomId);
+    connectToRoom(roomId);
+  });
+
+  overlay.querySelector('[data-action="copy"]').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl.textContent);
+      setUiMessage('Share URL copied');
+    } catch {
+      setUiMessage('Copy failed. Select the URL manually.');
+    }
+  });
+
+  roomInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      overlay.querySelector('[data-action="join"]').click();
+    }
+  });
+
+  return {
+    overlay,
+    roomInput,
+    share,
+    shareUrl,
+    message,
+  };
+}
+
+function autoJoinFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const roomId = sanitizeRoomId(params.get('room') || '');
+  if (roomId) {
+    ui.roomInput.value = roomId;
+    connectToRoom(roomId);
+  }
+}
+
+function connectToRoom(roomId) {
+  const wsUrl = resolveWsUrl();
+  client.roomId = roomId;
+  client.role = 'none';
+  client.status = 'connecting';
+  client.connected = false;
+  client.error = '';
+  client.lastState = null;
+  client.lastInput = null;
+  client.seenEvents.clear();
+  updateShareUi(roomId);
+
+  if (!wsUrl) {
+    client.status = 'disconnected';
+    client.error = 'WebSocket URL is not configured';
+    setUiMessage('Set VITE_WS_URL for deployed play.');
+    return;
+  }
+
+  if (client.ws) {
+    client.ws.close();
+  }
+
+  const ws = new WebSocket(wsUrl);
+  client.ws = ws;
+  setUiMessage(`Connecting to ${wsUrl}`);
+
+  ws.addEventListener('open', () => {
+    client.connected = true;
+    client.status = 'connected';
+    sendMessage({
+      type: MESSAGE_TYPES.join,
+      roomId,
+    });
+  });
+
+  ws.addEventListener('message', (event) => {
+    handleServerMessage(JSON.parse(event.data));
+  });
+
+  ws.addEventListener('close', () => {
+    client.connected = false;
+    client.status = 'disconnected';
+    setUiMessage('Disconnected from server');
+  });
+
+  ws.addEventListener('error', () => {
+    client.error = 'WebSocket connection failed';
+    setUiMessage(client.error);
+  });
+}
+
+function handleServerMessage(message) {
+  if (message.type === MESSAGE_TYPES.joined) {
+    client.role = message.role;
+    client.roomId = message.roomId;
+    setUiMessage(message.role === 'spectator' ? 'Room is full. You are spectating.' : `Joined as ${ROLE_LABELS[message.role]}`);
+    updateShareUi(message.roomId);
+    return;
+  }
+
+  if (message.type === MESSAGE_TYPES.state) {
+    client.lastState = message.state;
+    client.error = '';
+    return;
+  }
+
+  if (message.type === MESSAGE_TYPES.peerDisconnected) {
+    setUiMessage('Opponent disconnected');
+    return;
+  }
+
+  if (message.type === MESSAGE_TYPES.error) {
+    client.error = message.message || 'Server error';
+    setUiMessage(client.error);
+  }
+}
+
+function sendMessage(message) {
+  if (client.ws?.readyState === WebSocket.OPEN) {
+    client.ws.send(JSON.stringify(message));
+  }
+}
+
+function resolveWsUrl() {
+  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+  if (['localhost', '127.0.0.1', ''].includes(window.location.hostname) || window.location.protocol === 'file:') {
+    return 'ws://127.0.0.1:8787';
+  }
+  return '';
+}
+
+function createRoomId() {
+  if (crypto.randomUUID) {
+    return crypto.randomUUID().slice(0, 8);
+  }
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function sanitizeRoomId(roomId) {
+  return String(roomId || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+}
+
+function setRoomInUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', roomId);
+  window.history.replaceState({}, '', url);
+}
+
+function updateShareUi(roomId) {
+  if (!roomId) {
+    ui.share.hidden = true;
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', roomId);
+  ui.shareUrl.textContent = url.toString();
+  ui.share.hidden = false;
+}
+
+function setUiMessage(message) {
+  ui.message.textContent = message;
+}
+
+function connectionLabel() {
+  if (client.status === 'connecting') return 'Connecting';
+  if (client.connected) return 'Connected';
+  if (client.status === 'disconnected') return 'Disconnected';
+  return 'Offline';
 }
 
 const config = {
@@ -603,7 +602,7 @@ const config = {
     antialias: true,
     pixelArt: false,
   },
-  scene: AirHockeyScene,
+  scene: AirHockeyOnlineScene,
 };
 
 new Phaser.Game(config);

@@ -1,64 +1,124 @@
-# Air Hockey Prototype
+# Air Hockey Online Prototype
 
-Phaser + Viteで作った、ブラウザで遊べる2人対戦エアホッケーの試作です。
+Phaser + Vite + WebSocketで作った、ブラウザ向け1対1オンライン対戦エアホッケー試作です。
 
-## 起動方法
+## 仕組み
+
+- フロントエンド: Vite + Phaser
+- リアルタイムサーバー: Node.js + `ws`
+- 同期方式: サーバー権威型
+- クライアントは入力状態だけをWebSocketで送信
+- サーバーがルーム、プレイヤー割り当て、パドル、ディスク、得点、勝敗、強打受付を管理
+- サーバーは60Hzで物理更新し、状態を全クライアントへ送信
+- クライアントは受信状態をPhaserで軽く補間して描画
+
+Vercelの通常Serverless Functionは常時WebSocket接続に向かないため、現実的な構成として「Vercelでフロント、Render/Fly.io/RailwayなどでWebSocketサーバー」を使います。
+
+## ローカル起動
 
 ```bash
 npm install
+npm run dev:all
+```
+
+個別に起動する場合:
+
+```bash
+npm run server
 npm run dev
 ```
 
-表示されたURLをブラウザで開きます。標準では `http://127.0.0.1:5173/` です。
+標準URL:
 
-## Vercelへのデプロイ
+- フロント: `http://127.0.0.1:5173/`
+- WebSocketサーバー: `ws://127.0.0.1:8787`
+- Health check: `http://127.0.0.1:8787/health`
 
-VercelはViteとしてデプロイできます。設定は [vercel.json](vercel.json) にあります。
+## 2ブラウザでの確認
 
-```bash
-npm install
-npm run build
-npx vercel
-```
+1. `npm run dev:all` を起動
+2. 1つ目のブラウザで `http://127.0.0.1:5173/` を開く
+3. `Create room` を押す
+4. 表示された共有URLをコピー
+5. 2つ目のブラウザで共有URLを開く
+6. 先に入った人がPlayer 1、次に入った人がPlayer 2
+7. 3人目以降はSpectatorになります
 
-本番公開する場合:
+## 操作
 
-```bash
-npx vercel --prod
-```
+オンライン対戦では、自分のパドルだけ操作します。Player 1/2どちらでも同じキーです。
 
-CLIで `The specified token is not valid` が出る場合は、Vercelにログインし直してください。
-
-```bash
-npx vercel logout
-npx vercel login
-npx vercel --prod
-```
-
-トークンを使う場合は、Vercelの管理画面で新しいTokenを作り、ローカル環境変数に設定してから実行します。トークンをチャットに貼らないでください。
-
-## 操作方法
-
-- プレイヤー1（下側）: `W` `A` `S` `D` で移動、`Shift` で強打
-- プレイヤー2（上側）: 矢印キーで移動、`Space` で強打
-- `R`: 試合をリスタート
+- 移動: `WASD` または 矢印キー
+- 強打: `Shift` または `Space`
+- 再スタート要求: `R`
 
 ## ルール
 
-- 上側ゴールにディスクが入るとプレイヤー1が1点
-- 下側ゴールにディスクが入るとプレイヤー2が1点
+- Player 1は下側
+- Player 2は上側
+- 上ゴールに入るとPlayer 1が1点
+- 下ゴールに入るとPlayer 2が1点
 - ゴール後は短く停止してから中央に戻ります
 - 5点先取で勝利
+- 相手が切断した場合は待機状態になります
 
-## 使ったライブラリ
+## 環境変数
 
-- Phaser
-- Vite
-- playwright-core（ブラウザ検証用）
+`.env.example`:
+
+```bash
+VITE_WS_URL=ws://127.0.0.1:8787
+PORT=8787
+```
+
+ローカルでは `VITE_WS_URL` を未設定にしても `ws://127.0.0.1:8787` に接続します。
+
+Vercelにデプロイする場合は、Vercel側に本番WebSocketサーバーのURLを設定してください。
+
+```bash
+VITE_WS_URL=wss://your-airhockey-server.example.com
+```
+
+## Vercelデプロイ
+
+フロントはVercelにデプロイできます。設定は [vercel.json](vercel.json) にあります。
+
+```bash
+npm run build
+npx vercel --prod
+```
+
+VercelのProject Settingsで以下を設定します。
+
+- Framework: Vite
+- Build Command: `npm run build`
+- Output Directory: `dist`
+- Environment Variable: `VITE_WS_URL`
+
+## WebSocketサーバーのデプロイ
+
+Render/Railway/Fly.ioなど、常時起動のNode.jsサービスに置いてください。
+
+基本設定:
+
+- Start command: `npm run server`
+- Port: `8787` またはサービスが提供する `PORT`
+- Health check path: `/health`
+
+Render例:
+
+```text
+Build Command: npm install
+Start Command: npm run server
+Environment:
+  PORT=10000
+```
+
+Renderでは外部URLが `https://...` になるので、Vercelの `VITE_WS_URL` には `wss://...` を指定します。
 
 ## 調整しやすい数値
 
-主要なゲーム調整値は [src/main.js](src/main.js) の `GAME` と `TUNING` にまとめています。
+主要な数値は [src/shared/constants.js](src/shared/constants.js) にあります。
 
 - 画面サイズ: `GAME.width`, `GAME.height`
 - パドル速度: `TUNING.paddleSpeed`
@@ -68,52 +128,29 @@ npx vercel --prod
 - 強打受付時間: `TUNING.powerHitWindowMs`
 - 強打クールダウン: `TUNING.powerHitCooldownMs`
 - ゴール後の待ち時間: `GAME.goalDelayMs`
+- サーバーtick: `SERVER.tickRate`
 
-## imagegen素材
+## 検証項目
 
-初回実装後に `imagegen` で試作用の明るいエアホッケー台背景を生成しようとしましたが、レート制限で生成できませんでした。代替として、軽量な背景素材を [public/assets/table-bg.svg](public/assets/table-bg.svg) に作成し、ゲームに組み込んでいます。画像が読み込めない場合でも、ゲームはPhaserの図形描画だけで動きます。
+Playwrightで2ページを開いて、次を確認しました。
 
-試した `imagegen` プロンプト:
+- ルーム作成
+- 共有URLで参加
+- P1/P2割り当て
+- 3人目がSpectatorになる
+- 自分のパドルだけ動く
+- 相手の操作が同期される
+- ディスク状態が同期される
+- 得点が両者で一致する
+- 強打が同期される
+- 勝敗が両者で一致する
+- `R` キーで再スタート
+- 片方切断時の表示
 
-```text
-Use case: stylized-concept
-Asset type: 960x540 game background texture for a browser air hockey prototype
-Primary request: bright, kid-friendly top-down air hockey table background, clean and readable, no scary elements
-Scene/backdrop: top-down air hockey table surface with soft teal-blue playfield, subtle center line and center circle, warm yellow goal accents at top and bottom
-Style/medium: polished 2D game background texture, simple vector-like illustration, not photorealistic
-Composition/framing: exact 16:9 wide background, full table surface, no perspective tilt, leave gameplay area uncluttered
-Lighting/mood: cheerful, bright arcade lighting
-Color palette: teal, aqua, white, warm yellow accents
-Text (verbatim): none
-Constraints: no text, no logo, no watermark, no characters, no paddles, no puck, no UI, avoid busy details that could hide game objects
-```
+## 今後の改善
 
-## ブラウザ確認
-
-`$playwright-interactive` として使える同名ツールはこの環境では見つからず、Browserプラグインの常駐実行環境もWindowsサンドボックスの制限で起動できませんでした。そのため、`playwright-core` と既存Chromeを使って、ビルド済みの `dist/index.html` を実ブラウザで開いて確認しました。
-
-確認済み:
-
-- 起動して画面が表示される: OK
-- プレイヤー1のWASD移動: OK
-- プレイヤー2の矢印キー移動: OK
-- ディスクの壁反射: OK
-- ディスクのパドル反射: OK
-- Shift強打: OK
-- Space強打: OK
-- ゴール得点: OK
-- 5点先取の勝敗表示: OK
-- Rキーのリスタート: OK
-
-スクリーンショット:
-
-- `artifacts/playwright-initial.png`
-- `artifacts/playwright-final.png`
-
-## 今後の改善案
-
-- パドル操作に少し慣性を入れる
-- 強打成功時の音を追加する
-- CPU練習モードを追加する
-- ゴール付近の跳ね返りと得点判定をさらに細かく調整する
-- スマホやゲームパッド操作に対応する
+- 再接続時に同じプレイヤー枠へ復帰する
+- 予測入力を入れて操作遅延を減らす
+- サーバー側の部屋一覧や簡単なマッチングを追加する
+- 強打成功音やゴール音を追加する
+- Renderなどの外部WebSocketサーバーを本番環境に接続する

@@ -31,7 +31,7 @@ body {
 #app {
   display: grid;
   place-items: center;
-  padding: 12px;
+  padding: 118px 12px 12px;
 }
 
 #game {
@@ -43,4 +43,86 @@ canvas {
   display: block;
   border-radius: 8px;
   box-shadow: 0 22px 72px rgba(0, 0, 0, 0.4);
+}
+
+.room-panel {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  z-index: 10;
+  width: min(920px, calc(100vw - 28px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(126, 247, 255, 0.32);
+  border-radius: 8px;
+  background: rgba(5, 28, 39, 0.82);
+  box-shadow: 0 16px 46px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+}
+
+.room-panel__row,
+.room-panel__share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.room-panel button,
+.room-panel input {
+  height: 34px;
+  border: 1px solid rgba(191, 255, 255, 0.3);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.room-panel button {
+  padding: 0 12px;
+  color: #062433;
+  font-weight: 700;
+  background: #ffd166;
+  cursor: pointer;
+}
+
+.room-panel button:hover {
+  background: #ffe097;
+}
+
+.room-panel input {
+  flex: 1;
+  min-width: 120px;
+  padding: 0 10px;
+  color: #f7fbff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.room-panel__share span {
+  flex: 1;
+  overflow: hidden;
+  color: #bfe9ef;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-panel__message {
+  min-height: 16px;
+  color: #bfe9ef;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .room-panel {
+    top: 8px;
+  }
+
+  .room-panel__row,
+  .room-panel__share {
+    flex-wrap: wrap;
+  }
+
+  .room-panel input {
+    flex-basis: 100%;
+  }
 }
