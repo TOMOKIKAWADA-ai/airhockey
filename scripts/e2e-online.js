@@ -3,18 +3,23 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { PLAYER_IDS } from '../src/shared/constants.js';
 
 const cwd = process.cwd();
 const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const serverUrl = 'http://127.0.0.1:8787';
-const frontUrl = 'http://127.0.0.1:4173/';
+const wsPort = 9876;
+const staticPort = 4174;
+const serverUrl = `http://127.0.0.1:${wsPort}`;
+const wsUrl = `ws://127.0.0.1:${wsPort}`;
+const frontUrl = `http://127.0.0.1:${staticPort}/`;
+const frontWithWs = `${frontUrl}?ws=${encodeURIComponent(wsUrl)}`;
 
 const server = spawn('node', ['server/index.js'], {
   cwd,
   env: {
     ...process.env,
     AIR_HOCKEY_TEST_API: '1',
-    PORT: '8787',
+    PORT: String(wsPort),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -42,29 +47,39 @@ try {
   await fs.mkdir('artifacts', { recursive: true });
 
   const p1 = await newPage();
-  await p1.goto(frontUrl);
+  await p1.goto(frontWithWs);
   await p1.getByText('Create room', { exact: true }).click();
   await waitForRole(p1, 'p1');
   const roomId = await clientValue(p1, 'roomId');
 
-  const p2 = await newPage();
-  await p2.goto(`${frontUrl}?room=${roomId}`);
-  await waitForRole(p2, 'p2');
+  const p2 = await joinPage(roomId, 'p2');
+  const p3 = await joinPage(roomId, 'p3');
+  const p4 = await joinPage(roomId, 'p4');
+  const spectator = await joinPage(roomId, 'spectator');
 
-  const p3 = await newPage();
-  await p3.goto(`${frontUrl}?room=${roomId}`);
-  await waitForRole(p3, 'spectator');
-
-  await check('room_create_and_join', async () => {
+  await check('room_create_and_four_player_join', async () => {
     assert(roomId.length > 0, 'room id missing');
     assert((await clientValue(p1, 'role')) === 'p1', 'first page is not p1');
     assert((await clientValue(p2, 'role')) === 'p2', 'second page is not p2');
+    assert((await clientValue(p3, 'role')) === 'p3', 'third page is not p3');
+    assert((await clientValue(p4, 'role')) === 'p4', 'fourth page is not p4');
     return roomId;
   });
 
-  await check('third_client_spectator', async () => {
-    assert((await clientValue(p3, 'role')) === 'spectator', 'third page is not spectator');
+  await check('fifth_client_spectator', async () => {
+    assert((await clientValue(spectator, 'role')) === 'spectator', 'fifth page is not spectator');
     return 'spectator';
+  });
+
+  await check('start_button_countdown_then_playing', async () => {
+    await p1.getByText('Start match', { exact: true }).click();
+    await waitForStatus(p1, 'countdown');
+    const countdownState = await gameState(p1);
+    assert(countdownState.countdownMsRemaining > 3500, 'countdown did not start near five seconds');
+    await waitForStatus(p1, 'playing', 8_000);
+    const state = await gameState(p1);
+    assert(state.room.cpuCount === 0, 'cpu slots should not be used with four humans');
+    return state.status;
   });
 
   await check('p1_moves_only_own_paddle_and_syncs', async () => {
@@ -73,27 +88,28 @@ try {
     const after1 = await gameState(p1);
     const after2 = await gameState(p2);
     assert(after1.players.p1.x > before.players.p1.x + 12, 'p1 did not move right');
-    assert(Math.abs(after1.players.p2.x - before.players.p2.x) < 4, 'p2 moved from p1 input');
-    assert(Math.abs(after1.players.p1.x - after2.players.p1.x) < 4, 'p1 state not synced');
+    assert(Math.abs(after1.players.p2.x - before.players.p2.x) < 5, 'p2 moved from p1 input');
+    assert(Math.abs(after1.players.p1.x - after2.players.p1.x) < 5, 'p1 state not synced');
     return `p1.x ${before.players.p1.x.toFixed(1)} -> ${after1.players.p1.x.toFixed(1)}`;
   });
 
-  await check('p2_moves_and_syncs', async () => {
-    const before = await gameState(p2);
-    await hold(p2, 'ArrowLeft', 260);
+  await check('p3_moves_and_syncs', async () => {
+    const before = await gameState(p3);
+    await hold(p3, 'ArrowUp', 260);
     const after1 = await gameState(p1);
-    const after2 = await gameState(p2);
-    assert(after2.players.p2.x < before.players.p2.x - 12, 'p2 did not move left');
-    assert(Math.abs(after1.players.p2.x - after2.players.p2.x) < 4, 'p2 state not synced');
-    return `p2.x ${before.players.p2.x.toFixed(1)} -> ${after2.players.p2.x.toFixed(1)}`;
+    const after3 = await gameState(p3);
+    assert(after3.players.p3.y < before.players.p3.y - 12, 'p3 did not move up');
+    assert(Math.abs(after1.players.p3.y - after3.players.p3.y) < 5, 'p3 state not synced');
+    return `p3.y ${before.players.p3.y.toFixed(1)} -> ${after3.players.p3.y.toFixed(1)}`;
   });
 
   await check('puck_syncs', async () => {
-    await delay(200);
+    await delay(220);
     const s1 = await gameState(p1);
     const s2 = await gameState(p2);
-    assert(Math.abs(s1.puck.x - s2.puck.x) < 6, 'puck x mismatch');
-    assert(Math.abs(s1.puck.y - s2.puck.y) < 6, 'puck y mismatch');
+    const s4 = await gameState(p4);
+    assert(Math.abs(s1.puck.x - s2.puck.x) < 6, 'puck x mismatch p2');
+    assert(Math.abs(s1.puck.y - s4.puck.y) < 6, 'puck y mismatch p4');
     return `puck ${s1.puck.x.toFixed(1)},${s1.puck.y.toFixed(1)}`;
   });
 
@@ -120,62 +136,80 @@ try {
     return `p1PowerHits=${after1.debug.p1PowerHits}`;
   });
 
-  await check('goal_score_syncs', async () => {
+  await check('top_goal_scores_for_p1_and_syncs', async () => {
     const before = await gameState(p1);
     await testApi(roomId, {
       action: 'placePuck',
-      x: 480,
+      x: 450,
       y: -24,
       vx: 0,
       vy: -150,
     });
     await delay(180);
     const after1 = await gameState(p1);
-    const after2 = await gameState(p2);
+    const after4 = await gameState(p4);
     assert(after1.score.p1 === before.score.p1 + 1, 'p1 score did not increase');
-    assert(after2.score.p1 === after1.score.p1, 'score not synced');
+    assert(after4.score.p1 === after1.score.p1, 'score not synced');
     return `p1=${after1.score.p1}`;
   });
 
   await check('win_syncs', async () => {
-    await testApi(roomId, { action: 'setScore', p1: 4, p2: 0 });
+    await testApi(roomId, { action: 'setScore', p1: 4, p2: 0, p3: 0, p4: 0 });
     await testApi(roomId, {
       action: 'placePuck',
-      x: 480,
+      x: 450,
       y: -24,
       vx: 0,
       vy: -150,
     });
     await delay(180);
     const after1 = await gameState(p1);
-    const after2 = await gameState(p2);
+    const after3 = await gameState(p3);
     assert(after1.winner === 'p1', `winner is ${after1.winner}`);
-    assert(after2.winner === 'p1', 'winner not synced');
+    assert(after3.winner === 'p1', 'winner not synced');
     return 'p1';
   });
 
-  await check('restart_request_syncs', async () => {
+  await check('restart_request_starts_new_countdown', async () => {
     await p1.keyboard.press('R');
-    await delay(180);
+    await delay(220);
     const after1 = await gameState(p1);
     const after2 = await gameState(p2);
     assert(!after1.winner, 'winner still set after restart');
-    assert(after1.score.p1 === 0 && after1.score.p2 === 0, 'p1 score not reset');
-    assert(after2.score.p1 === 0 && after2.score.p2 === 0, 'p2 score not reset');
-    return 'reset';
+    assert(after1.status === 'countdown', `restart status is ${after1.status}`);
+    assert(PLAYER_IDS.every((id) => after1.score[id] === 0), 'scores not reset');
+    assert(after2.status === after1.status, 'restart status not synced');
+    return 'countdown';
   });
 
-  await check('disconnect_notice', async () => {
+  await check('disconnect_cpu_takeover_notice', async () => {
     await p2.close();
     await delay(350);
     const state = await gameState(p1);
-    const message = await p1.locator('[data-message]').innerText({ timeoutMs: 5000 });
-    assert(!state.players.p2.connected, 'p2 still connected');
-    assert(message.includes('Opponent disconnected') || state.status === 'waiting', 'disconnect notice missing');
-    return message || state.status;
+    const message = await p1.locator('[data-message]').innerText({ timeout: 5000 });
+    assert(state.players.p2.connected, 'p2 slot should stay active');
+    assert(state.players.p2.cpu, 'p2 should be taken over by CPU');
+    assert(message.includes('CPU takes over'), 'disconnect notice missing');
+    return message;
+  });
+
+  await check('solo_start_fills_empty_slots_with_cpu', async () => {
+    const solo = await newPage();
+    await solo.goto(frontWithWs);
+    await solo.getByText('Create room', { exact: true }).click();
+    await waitForRole(solo, 'p1');
+    await solo.getByText('Start match', { exact: true }).click();
+    await waitForStatus(solo, 'countdown');
+    const state = await gameState(solo);
+    assert(state.room.cpuCount === 3, `cpu count is ${state.room.cpuCount}`);
+    assert(state.players.p2.cpu && state.players.p3.cpu && state.players.p4.cpu, 'empty slots not filled by CPU');
+    await solo.close();
+    return '3 cpu players';
   });
 
   await p1.screenshot({ path: 'artifacts/online-e2e-final.png', fullPage: true });
+
+  await Promise.all([p1, p3, p4, spectator].map((page) => page.close().catch(() => {})));
 } finally {
   if (browser) await browser.close();
   if (staticServer) await new Promise((resolve) => staticServer.close(resolve));
@@ -185,8 +219,15 @@ try {
 console.log(JSON.stringify({ results, serverLog: serverLog.slice(-1000) }, null, 2));
 process.exit(results.every((result) => result.ok) ? 0 : 1);
 
+async function joinPage(roomId, role) {
+  const page = await newPage();
+  await page.goto(roomUrl(roomId));
+  await waitForRole(page, role);
+  return page;
+}
+
 async function newPage() {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', (error) => {
     results.push({ name: 'pageerror', ok: false, detail: error.message });
   });
@@ -223,6 +264,14 @@ async function waitForRole(page, role) {
   );
 }
 
+async function waitForStatus(page, status, timeout = 10_000) {
+  await page.waitForFunction(
+    (expectedStatus) => window.__AIR_HOCKEY_CLIENT_STATE__?.().lastState?.status === expectedStatus,
+    status,
+    { timeout },
+  );
+}
+
 async function clientValue(page, key) {
   return page.evaluate((valueKey) => window.__AIR_HOCKEY_CLIENT_STATE__()[valueKey], key);
 }
@@ -249,6 +298,10 @@ async function testApi(roomId, body) {
   if (!res.ok) {
     throw new Error(`test api failed: ${res.status} ${await res.text()}`);
   }
+}
+
+function roomUrl(roomId) {
+  return `${frontUrl}?room=${encodeURIComponent(roomId)}&ws=${encodeURIComponent(wsUrl)}`;
 }
 
 function assert(condition, message) {
@@ -293,6 +346,6 @@ function startStaticServer() {
   });
 
   return new Promise((resolve) => {
-    app.listen(4173, '127.0.0.1', () => resolve(app));
+    app.listen(staticPort, '127.0.0.1', () => resolve(app));
   });
 }

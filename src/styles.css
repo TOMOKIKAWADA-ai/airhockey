@@ -31,12 +31,12 @@ body {
 #app {
   display: grid;
   place-items: center;
-  padding: 118px 12px 12px;
+  padding: 132px 12px 12px;
 }
 
 #game {
-  width: min(100vw - 24px, 960px);
-  aspect-ratio: 16 / 9;
+  width: min(100vw - 24px, 100vh - 156px, 900px);
+  aspect-ratio: 1 / 1;
 }
 
 canvas {
@@ -50,7 +50,7 @@ canvas {
   top: 14px;
   left: 50%;
   z-index: 10;
-  width: min(920px, calc(100vw - 28px));
+  width: min(900px, calc(100vw - 28px));
   transform: translateX(-50%);
   display: grid;
   gap: 8px;
@@ -83,6 +83,7 @@ canvas {
   font-weight: 700;
   background: #ffd166;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .room-panel button:hover {
@@ -115,6 +116,14 @@ canvas {
 @media (max-width: 720px) {
   .room-panel {
     top: 8px;
+  }
+
+  #app {
+    padding-top: 156px;
+  }
+
+  #game {
+    width: min(100vw - 24px, 100vh - 180px, 900px);
   }
 
   .room-panel__row,

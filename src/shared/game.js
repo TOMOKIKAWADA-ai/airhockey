@@ -1,4 +1,4 @@
-import { GAME, LIMITS, PLAYER_IDS, SERVER, START_POSITIONS, TUNING } from './constants.js';
+import { GAME, LIMITS, MAP, PLAYER_IDS, SERVER, START_POSITIONS, TUNING } from './constants.js';
 
 const emptyInput = () => ({
   up: false,
@@ -8,18 +8,55 @@ const emptyInput = () => ({
   power: false,
 });
 
-const randomRoundVelocity = (directionY = Math.random() < 0.5 ? -1 : 1) => {
-  const degrees = 58 + Math.random() * 64;
-  const angle = (degrees * Math.PI) / 180;
-  const side = Math.random() < 0.5 ? -1 : 1;
-  return {
-    vx: Math.cos(angle) * TUNING.puckStartSpeed * side,
-    vy: Math.sin(angle) * TUNING.puckStartSpeed * directionY,
-  };
-};
-
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const length = (x, y) => Math.hypot(x, y);
+
+const scoreForGoal = {
+  top: 'p1',
+  bottom: 'p2',
+  left: 'p4',
+  right: 'p3',
+};
+
+const serveDirectionAfterScore = {
+  p1: { x: 0, y: -1 },
+  p2: { x: 0, y: 1 },
+  p3: { x: 1, y: 0 },
+  p4: { x: -1, y: 0 },
+};
+
+const wallSegments = () => {
+  const m = MAP.margin;
+  const lx = MAP.leftArmX;
+  const rx = MAP.rightArmX;
+  const ty = MAP.topArmY;
+  const by = MAP.bottomArmY;
+  const cx = MAP.centerX;
+  const cy = MAP.centerY;
+  const gw = TUNING.goalWidth / 2;
+
+  return [
+    // Goal end walls, split so the center opening can score.
+    { x1: lx, y1: m, x2: cx - gw, y2: m },
+    { x1: cx + gw, y1: m, x2: rx, y2: m },
+    { x1: lx, y1: GAME.height - m, x2: cx - gw, y2: GAME.height - m },
+    { x1: cx + gw, y1: GAME.height - m, x2: rx, y2: GAME.height - m },
+    { x1: m, y1: ty, x2: m, y2: cy - gw },
+    { x1: m, y1: cy + gw, x2: m, y2: by },
+    { x1: GAME.width - m, y1: ty, x2: GAME.width - m, y2: cy - gw },
+    { x1: GAME.width - m, y1: cy + gw, x2: GAME.width - m, y2: by },
+
+    // The four inside corners of the cross-shaped rink.
+    { x1: lx, y1: m, x2: lx, y2: ty },
+    { x1: m, y1: ty, x2: lx, y2: ty },
+    { x1: rx, y1: m, x2: rx, y2: ty },
+    { x1: rx, y1: ty, x2: GAME.width - m, y2: ty },
+    { x1: lx, y1: by, x2: lx, y2: GAME.height - m },
+    { x1: m, y1: by, x2: lx, y2: by },
+    { x1: rx, y1: by, x2: rx, y2: GAME.height - m },
+    { x1: rx, y1: by, x2: GAME.width - m, y2: by },
+  ];
+};
 
 const setVectorLength = (vector, targetLength) => {
   const currentLength = length(vector.vx, vector.vy);
@@ -30,35 +67,35 @@ const setVectorLength = (vector, targetLength) => {
   return vector;
 };
 
+const createScore = () => Object.fromEntries(PLAYER_IDS.map((id) => [id, 0]));
+
+const createDebug = () => ({
+  ...Object.fromEntries(PLAYER_IDS.map((id) => [`${id}PowerHits`, 0])),
+  ...Object.fromEntries(PLAYER_IDS.map((id) => [`${id}Goals`, 0])),
+  paddleHits: 0,
+  wallHits: 0,
+});
+
 export function createInitialGameState(roomId = '') {
-  const velocity = randomRoundVelocity();
   return {
-    version: 1,
+    version: 2,
     roomId,
     tick: 0,
-    status: 'waiting',
-    statusText: 'Waiting for opponent',
+    status: 'lobby',
+    statusText: 'Waiting for players. Press Start to fill empty slots with CPU.',
     winner: null,
     goalResumeAt: 0,
-    players: {
-      p1: createPlayerState('p1', false),
-      p2: createPlayerState('p2', false),
-    },
+    countdownEndsAt: 0,
+    lastScoredBy: null,
+    players: Object.fromEntries(PLAYER_IDS.map((id) => [id, createPlayerState(id, false)])),
     puck: {
       x: GAME.width / 2,
       y: GAME.height / 2,
-      vx: velocity.vx,
-      vy: velocity.vy,
+      vx: 0,
+      vy: 0,
     },
-    score: { p1: 0, p2: 0 },
-    debug: {
-      p1PowerHits: 0,
-      p2PowerHits: 0,
-      p1Goals: 0,
-      p2Goals: 0,
-      paddleHits: 0,
-      wallHits: 0,
-    },
+    score: createScore(),
+    debug: createDebug(),
     events: [],
   };
 }
@@ -68,6 +105,7 @@ export function createPlayerState(id, connected) {
   return {
     id,
     connected,
+    cpu: false,
     x: start.x,
     y: start.y,
     vx: 0,
@@ -79,24 +117,120 @@ export function createPlayerState(id, connected) {
   };
 }
 
-export function resetMatch(state, nowMs = Date.now()) {
-  state.score.p1 = 0;
-  state.score.p2 = 0;
+export function startCountdown(state, nowMs = Date.now()) {
+  resetScoresAndDebug(state);
+  resetPlayerPositions(state);
+  centerPuck(state);
   state.winner = null;
-  state.status = bothPlayersConnected(state) ? 'playing' : 'waiting';
-  state.statusText = state.status === 'playing' ? '' : 'Waiting for opponent';
+  state.lastScoredBy = null;
   state.goalResumeAt = 0;
-  state.debug.p1PowerHits = 0;
-  state.debug.p2PowerHits = 0;
-  state.debug.p1Goals = 0;
-  state.debug.p2Goals = 0;
-  state.debug.paddleHits = 0;
-  state.debug.wallHits = 0;
-  resetRound(state, Math.random() < 0.5 ? -1 : 1, nowMs);
+  state.countdownEndsAt = nowMs + GAME.countdownMs;
+  state.status = 'countdown';
+  state.statusText = countdownText(state, nowMs);
+  pushEvent(state, 'countdown', { at: nowMs, endsAt: state.countdownEndsAt });
+}
+
+export function resetMatch(state, nowMs = Date.now()) {
+  startCountdown(state, nowMs);
   pushEvent(state, 'restart', { at: nowMs });
 }
 
-export function resetRound(state, directionY = Math.random() < 0.5 ? -1 : 1, nowMs = Date.now()) {
+export function resetRound(state, scoredBy = state.lastScoredBy, nowMs = Date.now()) {
+  resetPlayerPositions(state);
+  centerPuck(state);
+  const velocity = randomRoundVelocity(scoredBy);
+  state.puck.vx = velocity.vx;
+  state.puck.vy = velocity.vy;
+  correctAxisLock(state.puck);
+  capPuckSpeed(state.puck);
+  state.goalResumeAt = 0;
+  state.status = 'playing';
+  state.statusText = '';
+  pushEvent(state, 'roundStart', { at: nowMs });
+}
+
+export function setPlayerConnected(state, playerId, connected, options = {}) {
+  const player = state.players[playerId];
+  if (!player) return;
+  player.connected = connected;
+  player.cpu = options.cpu ?? (connected ? false : player.cpu);
+  if (!connected) {
+    player.cpu = false;
+    player.input = emptyInput();
+    player.lastInput = emptyInput();
+  }
+  if (!allPlayerSlotsActive(state) && !state.winner && state.status !== 'lobby') {
+    state.status = 'waiting';
+    state.statusText = connected ? 'Waiting for players' : `${playerLabel(playerId)} disconnected`;
+    centerPuck(state);
+  }
+}
+
+export function setPlayerCpu(state, playerId, cpu) {
+  const player = state.players[playerId];
+  if (!player) return;
+  player.cpu = cpu;
+  player.connected = cpu || player.connected;
+  player.input = emptyInput();
+  player.lastInput = emptyInput();
+}
+
+export function updateInput(state, playerId, input, nowMs = Date.now()) {
+  const player = state.players[playerId];
+  if (!player || player.cpu) return;
+  setInput(player, input, nowMs);
+}
+
+export function stepGame(state, deltaMs, nowMs = Date.now()) {
+  state.tick += 1;
+  pruneEvents(state, nowMs);
+
+  if (state.winner) {
+    state.status = 'gameOver';
+    state.statusText = `${playerLabel(state.winner)} Wins`;
+    return;
+  }
+
+  if (state.status === 'lobby' || state.status === 'waiting') {
+    return;
+  }
+
+  updateCpuInputs(state, nowMs);
+  for (const id of PLAYER_IDS) {
+    updatePaddle(state.players[id], deltaMs);
+  }
+
+  if (!allPlayerSlotsActive(state)) {
+    state.status = 'waiting';
+    state.statusText = 'Waiting for players';
+    centerPuck(state);
+    return;
+  }
+
+  if (state.status === 'countdown') {
+    state.statusText = countdownText(state, nowMs);
+    if (nowMs < state.countdownEndsAt) return;
+    resetRound(state, null, nowMs);
+  }
+
+  if (state.status === 'goal') {
+    if (nowMs >= state.goalResumeAt) {
+      resetRound(state, state.lastScoredBy, nowMs);
+    }
+    return;
+  }
+
+  state.status = 'playing';
+  state.statusText = '';
+  updatePuck(state, deltaMs, nowMs);
+}
+
+function resetScoresAndDebug(state) {
+  state.score = createScore();
+  state.debug = createDebug();
+}
+
+function resetPlayerPositions(state) {
   for (const id of PLAYER_IDS) {
     const player = state.players[id];
     const start = START_POSITIONS[id];
@@ -109,40 +243,32 @@ export function resetRound(state, directionY = Math.random() < 0.5 ? -1 : 1, now
     player.lastPowerPressedAt = -Infinity;
     player.lastPowerUsedAt = -Infinity;
   }
+}
 
-  const velocity = randomRoundVelocity(directionY);
+function centerPuck(state) {
   state.puck.x = GAME.width / 2;
   state.puck.y = GAME.height / 2;
-  state.puck.vx = velocity.vx;
-  state.puck.vy = velocity.vy;
-  correctAxisLock(state.puck);
-  capPuckSpeed(state.puck);
-
-  if (bothPlayersConnected(state) && !state.winner) {
-    state.status = 'playing';
-    state.statusText = '';
-  }
-  state.goalResumeAt = 0;
-  pushEvent(state, 'roundStart', { at: nowMs });
+  state.puck.vx = 0;
+  state.puck.vy = 0;
 }
 
-export function setPlayerConnected(state, playerId, connected) {
-  state.players[playerId].connected = connected;
-  if (!connected) {
-    state.players[playerId].input = emptyInput();
-  }
-  if (!bothPlayersConnected(state) && !state.winner) {
-    state.status = 'waiting';
-    state.statusText = connected ? 'Waiting for opponent' : `${playerLabel(playerId)} disconnected`;
-    state.puck.vx = 0;
-    state.puck.vy = 0;
-  } else if (bothPlayersConnected(state) && state.status === 'waiting' && !state.winner) {
-    resetRound(state, Math.random() < 0.5 ? -1 : 1);
-  }
+function randomRoundVelocity(scoredBy = null) {
+  const direction = serveDirectionAfterScore[scoredBy] || randomDirection();
+  const baseAngle = Math.atan2(direction.y, direction.x);
+  const spread = (Math.random() - 0.5) * (Math.PI / 2.2);
+  const angle = baseAngle + spread;
+  return {
+    vx: Math.cos(angle) * TUNING.puckStartSpeed,
+    vy: Math.sin(angle) * TUNING.puckStartSpeed,
+  };
 }
 
-export function updateInput(state, playerId, input, nowMs = Date.now()) {
-  const player = state.players[playerId];
+function randomDirection() {
+  const angle = Math.random() * Math.PI * 2;
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
+function setInput(player, input, nowMs) {
   const nextInput = {
     up: Boolean(input.up),
     down: Boolean(input.down),
@@ -158,43 +284,60 @@ export function updateInput(state, playerId, input, nowMs = Date.now()) {
   player.input = nextInput;
 }
 
-export function stepGame(state, deltaMs, nowMs = Date.now()) {
-  state.tick += 1;
-  pruneEvents(state, nowMs);
-
-  if (!bothPlayersConnected(state)) {
-    if (!state.winner) {
-      state.status = 'waiting';
-      state.statusText = 'Waiting for opponent';
-    }
-    return;
-  }
-
-  if (state.winner) {
-    state.status = 'gameOver';
-    state.statusText = `${playerLabel(state.winner)} Wins`;
-    return;
-  }
-
-  if (state.status === 'goal') {
-    if (nowMs >= state.goalResumeAt) {
-      const directionY = state.lastScoredBy === 'p1' ? -1 : 1;
-      resetRound(state, directionY, nowMs);
-    }
-    return;
-  }
-
-  state.status = 'playing';
-  state.statusText = '';
-
+function updateCpuInputs(state, nowMs) {
   for (const id of PLAYER_IDS) {
-    updatePaddle(state.players[id], deltaMs);
+    const player = state.players[id];
+    if (!player.cpu) continue;
+
+    const target = cpuTargetFor(id, state.puck);
+    const dx = target.x - player.x;
+    const dy = target.y - player.y;
+    const closeToPuck = length(state.puck.x - player.x, state.puck.y - player.y) < TUNING.paddleRadius + TUNING.puckRadius + 42;
+
+    setInput(
+      player,
+      {
+        left: dx < -8,
+        right: dx > 8,
+        up: dy < -8,
+        down: dy > 8,
+        power: closeToPuck && nowMs - player.lastPowerUsedAt > TUNING.powerHitCooldownMs,
+      },
+      nowMs,
+    );
+  }
+}
+
+function cpuTargetFor(playerId, puck) {
+  const start = START_POSITIONS[playerId];
+  const limit = LIMITS[playerId];
+  const centerX = GAME.width / 2;
+  const centerY = GAME.height / 2;
+  const target = { x: start.x, y: start.y };
+
+  if (playerId === 'p1' && puck.y > centerY - 70) {
+    target.x = puck.x;
+    target.y = Math.max(puck.y + 28, start.y - 130);
+  } else if (playerId === 'p2' && puck.y < centerY + 70) {
+    target.x = puck.x;
+    target.y = Math.min(puck.y - 28, start.y + 130);
+  } else if (playerId === 'p3' && puck.x < centerX + 70) {
+    target.x = Math.min(puck.x - 28, start.x + 130);
+    target.y = puck.y;
+  } else if (playerId === 'p4' && puck.x > centerX - 70) {
+    target.x = Math.max(puck.x + 28, start.x - 130);
+    target.y = puck.y;
   }
 
-  updatePuck(state, deltaMs, nowMs);
+  return {
+    x: clamp(target.x, limit.minX, limit.maxX),
+    y: clamp(target.y, limit.minY, limit.maxY),
+  };
 }
 
 function updatePaddle(player, deltaMs) {
+  if (!player.connected) return;
+
   const seconds = deltaMs / 1000;
   let ix = 0;
   let iy = 0;
@@ -210,8 +353,10 @@ function updatePaddle(player, deltaMs) {
 
   const previousX = player.x;
   const previousY = player.y;
-  player.x = clamp(player.x + ix * TUNING.paddleSpeed * seconds, TUNING.paddleRadius, GAME.width - TUNING.paddleRadius);
-  player.y = clamp(player.y + iy * TUNING.paddleSpeed * seconds, LIMITS[player.id].minY, LIMITS[player.id].maxY);
+  const speed = TUNING.paddleSpeed * (player.cpu ? TUNING.cpuSpeedScale : 1);
+  const limit = LIMITS[player.id];
+  player.x = clamp(player.x + ix * speed * seconds, limit.minX, limit.maxX);
+  player.y = clamp(player.y + iy * speed * seconds, limit.minY, limit.maxY);
   player.vx = (player.x - previousX) / Math.max(seconds, 0.001);
   player.vy = (player.y - previousY) / Math.max(seconds, 0.001);
 }
@@ -225,42 +370,62 @@ function updatePuck(state, deltaMs, nowMs) {
   state.puck.vx *= friction;
   state.puck.vy *= friction;
 
+  checkGoal(state, nowMs);
+  if (state.status !== 'playing') return;
+
   resolveWallCollisions(state);
-  resolvePaddleCollision(state, state.players.p1, nowMs);
-  resolvePaddleCollision(state, state.players.p2, nowMs);
+  for (const id of PLAYER_IDS) {
+    resolvePaddleCollision(state, state.players[id], nowMs);
+  }
   correctAxisLock(state.puck);
   capPuckSpeed(state.puck);
   checkGoal(state, nowMs);
 }
 
 function resolveWallCollisions(state) {
-  const puck = state.puck;
+  let hit = false;
+  for (const segment of wallSegments()) {
+    hit = resolveSegmentCollision(state.puck, segment) || hit;
+  }
+  if (hit) state.debug.wallHits += 1;
+}
+
+function resolveSegmentCollision(puck, segment) {
   const r = TUNING.puckRadius;
-  const left = 24 + r;
-  const right = GAME.width - 24 - r;
-  const topWall = 20 + r;
-  const bottomWall = GAME.height - 20 - r;
+  const sx = segment.x2 - segment.x1;
+  const sy = segment.y2 - segment.y1;
+  const segmentLengthSq = sx * sx + sy * sy;
+  const t = segmentLengthSq === 0 ? 0 : clamp(((puck.x - segment.x1) * sx + (puck.y - segment.y1) * sy) / segmentLengthSq, 0, 1);
+  const closestX = segment.x1 + sx * t;
+  const closestY = segment.y1 + sy * t;
+  const dx = puck.x - closestX;
+  const dy = puck.y - closestY;
+  const distanceSq = dx * dx + dy * dy;
 
-  if (puck.x < left) {
-    puck.x = left;
-    puck.vx = Math.abs(puck.vx);
-    state.debug.wallHits += 1;
-  } else if (puck.x > right) {
-    puck.x = right;
-    puck.vx = -Math.abs(puck.vx);
-    state.debug.wallHits += 1;
+  if (distanceSq >= r * r) return false;
+
+  const distance = Math.sqrt(distanceSq);
+  let nx = distance > 0.0001 ? dx / distance : 0;
+  let ny = distance > 0.0001 ? dy / distance : 0;
+
+  if (distance <= 0.0001) {
+    if (Math.abs(sx) < Math.abs(sy)) {
+      nx = Math.sign(puck.vx || (puck.x - MAP.centerX)) || 1;
+      ny = 0;
+    } else {
+      nx = 0;
+      ny = Math.sign(puck.vy || (puck.y - MAP.centerY)) || 1;
+    }
   }
 
-  const inGoal = isPuckInGoalLane(puck);
-  if (!inGoal && puck.y < topWall) {
-    puck.y = topWall;
-    puck.vy = Math.abs(puck.vy);
-    state.debug.wallHits += 1;
-  } else if (!inGoal && puck.y > bottomWall) {
-    puck.y = bottomWall;
-    puck.vy = -Math.abs(puck.vy);
-    state.debug.wallHits += 1;
+  puck.x = closestX + nx * r;
+  puck.y = closestY + ny * r;
+  const incoming = puck.vx * nx + puck.vy * ny;
+  if (incoming < 0) {
+    puck.vx -= 2 * incoming * nx;
+    puck.vy -= 2 * incoming * ny;
   }
+  return true;
 }
 
 function resolvePaddleCollision(state, paddle, nowMs) {
@@ -315,12 +480,17 @@ function canPowerHit(paddle, nowMs) {
 
 function checkGoal(state, nowMs) {
   const puck = state.puck;
-  if (!isPuckInGoalLane(puck)) return;
+  const r = TUNING.puckRadius;
+  const m = MAP.margin;
 
-  if (puck.y < -TUNING.puckRadius) {
-    awardPoint(state, 'p1', nowMs);
-  } else if (puck.y > GAME.height + TUNING.puckRadius) {
-    awardPoint(state, 'p2', nowMs);
+  if (isTopBottomGoalLane(puck) && puck.y < m - r) {
+    awardPoint(state, scoreForGoal.top, nowMs);
+  } else if (isTopBottomGoalLane(puck) && puck.y > GAME.height - m + r) {
+    awardPoint(state, scoreForGoal.bottom, nowMs);
+  } else if (isLeftRightGoalLane(puck) && puck.x < m - r) {
+    awardPoint(state, scoreForGoal.left, nowMs);
+  } else if (isLeftRightGoalLane(puck) && puck.x > GAME.width - m + r) {
+    awardPoint(state, scoreForGoal.right, nowMs);
   }
 }
 
@@ -329,8 +499,7 @@ function awardPoint(state, playerId, nowMs) {
   state.score[playerId] += 1;
   state.debug[`${playerId}Goals`] += 1;
   state.lastScoredBy = playerId;
-  state.puck.vx = 0;
-  state.puck.vy = 0;
+  centerPuck(state);
 
   pushEvent(state, 'goal', {
     at: nowMs,
@@ -375,16 +544,24 @@ function capPuckSpeed(puck) {
   }
 }
 
-function isPuckInGoalLane(puck) {
+function isTopBottomGoalLane(puck) {
   return Math.abs(puck.x - GAME.width / 2) <= TUNING.goalWidth / 2 - TUNING.puckRadius * 0.25;
 }
 
+function isLeftRightGoalLane(puck) {
+  return Math.abs(puck.y - GAME.height / 2) <= TUNING.goalWidth / 2 - TUNING.puckRadius * 0.25;
+}
+
+export function allPlayerSlotsActive(state) {
+  return PLAYER_IDS.every((id) => state.players[id].connected);
+}
+
 export function bothPlayersConnected(state) {
-  return state.players.p1.connected && state.players.p2.connected;
+  return allPlayerSlotsActive(state);
 }
 
 export function playerLabel(playerId) {
-  return playerId === 'p1' ? 'Player 1' : 'Player 2';
+  return `Player ${PLAYER_IDS.indexOf(playerId) + 1}`;
 }
 
 export function pushEvent(state, type, payload = {}) {
@@ -401,7 +578,16 @@ function pruneEvents(state, nowMs) {
   state.events = state.events.filter((event) => !event.at || nowMs - event.at <= SERVER.eventTtlMs);
 }
 
+function countdownText(state, nowMs) {
+  const seconds = Math.max(0, Math.ceil((state.countdownEndsAt - nowMs) / 1000));
+  return `Starting in ${seconds}`;
+}
+
 export function serializeState(state, roomInfo = {}) {
+  const players = Object.fromEntries(PLAYER_IDS.map((id) => [id, publicPlayer(state.players[id])]));
+  const humanCount = PLAYER_IDS.filter((id) => state.players[id].connected && !state.players[id].cpu).length;
+  const cpuCount = PLAYER_IDS.filter((id) => state.players[id].connected && state.players[id].cpu).length;
+
   return {
     version: state.version,
     roomId: state.roomId,
@@ -409,10 +595,9 @@ export function serializeState(state, roomInfo = {}) {
     status: state.status,
     statusText: state.statusText,
     winner: state.winner,
-    players: {
-      p1: publicPlayer(state.players.p1),
-      p2: publicPlayer(state.players.p2),
-    },
+    lastScoredBy: state.lastScoredBy,
+    countdownMsRemaining: state.status === 'countdown' ? Math.max(0, state.countdownEndsAt - Date.now()) : 0,
+    players,
     puck: {
       x: state.puck.x,
       y: state.puck.y,
@@ -424,7 +609,8 @@ export function serializeState(state, roomInfo = {}) {
     debug: { ...state.debug },
     events: state.events.map((event) => ({ ...event })),
     room: {
-      playerCount: Number(state.players.p1.connected) + Number(state.players.p2.connected),
+      playerCount: humanCount,
+      cpuCount,
       spectatorCount: roomInfo.spectatorCount ?? 0,
     },
   };
@@ -434,6 +620,7 @@ function publicPlayer(player) {
   return {
     id: player.id,
     connected: player.connected,
+    cpu: player.cpu,
     x: player.x,
     y: player.y,
     vx: player.vx,

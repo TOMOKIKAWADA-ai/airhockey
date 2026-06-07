@@ -1,11 +1,13 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { MESSAGE_TYPES, SERVER } from '../src/shared/constants.js';
+import { MESSAGE_TYPES, PLAYER_IDS, SERVER } from '../src/shared/constants.js';
 import {
   createInitialGameState,
   resetMatch,
   serializeState,
   setPlayerConnected,
+  setPlayerCpu,
+  startCountdown,
   stepGame,
   updateInput,
 } from '../src/shared/game.js';
@@ -84,6 +86,9 @@ function handleMessage(client, message) {
     case MESSAGE_TYPES.input:
       handleInput(client, message.input);
       break;
+    case MESSAGE_TYPES.start:
+      handleStart(client);
+      break;
     case MESSAGE_TYPES.restart:
       handleRestart(client);
       break;
@@ -106,16 +111,16 @@ function joinRoom(client, roomId) {
   }
 
   const room = getRoom(roomId);
+  if (room.clients.size === 0 && room.emptySince) {
+    resetRoom(room);
+  }
   client.roomId = roomId;
 
-  if (!room.players.p1) {
-    client.role = 'p1';
-    room.players.p1 = client.id;
-    setPlayerConnected(room.state, 'p1', true);
-  } else if (!room.players.p2) {
-    client.role = 'p2';
-    room.players.p2 = client.id;
-    setPlayerConnected(room.state, 'p2', true);
+  const openSlot = PLAYER_IDS.find((id) => !room.players[id]);
+  if (openSlot) {
+    client.role = openSlot;
+    room.players[openSlot] = client.id;
+    setPlayerConnected(room.state, openSlot, true, { cpu: false });
   } else {
     client.role = 'spectator';
     room.spectators.add(client.id);
@@ -141,10 +146,21 @@ function handleInput(client, input) {
   room.updatedAt = Date.now();
 }
 
-function handleRestart(client) {
-  if (!client.roomId || client.role === 'spectator') return;
+function handleStart(client) {
+  if (!client.roomId || !isPlayerRole(client.role)) return;
   const room = rooms.get(client.roomId);
   if (!room) return;
+  fillCpuSlots(room);
+  startCountdown(room.state, Date.now());
+  room.updatedAt = Date.now();
+  broadcastState(room);
+}
+
+function handleRestart(client) {
+  if (!client.roomId || !isPlayerRole(client.role)) return;
+  const room = rooms.get(client.roomId);
+  if (!room) return;
+  fillCpuSlots(room);
   resetMatch(room.state, Date.now());
   room.updatedAt = Date.now();
   broadcastState(room);
@@ -160,10 +176,14 @@ function leaveRoom(client) {
   if (!room) return;
 
   room.clients.delete(client.id);
-  if (client.role === 'p1' || client.role === 'p2') {
+  if (isPlayerRole(client.role)) {
     if (room.players[client.role] === client.id) {
       room.players[client.role] = null;
-      setPlayerConnected(room.state, client.role, false);
+      if (room.state.status === 'playing' || room.state.status === 'countdown' || room.state.status === 'goal') {
+        setPlayerCpu(room.state, client.role, true);
+      } else {
+        setPlayerConnected(room.state, client.role, false);
+      }
       broadcast(room, {
         type: MESSAGE_TYPES.peerDisconnected,
         role: client.role,
@@ -189,13 +209,32 @@ function getRoom(roomId) {
       id: roomId,
       state: createInitialGameState(roomId),
       clients: new Map(),
-      players: { p1: null, p2: null },
+      players: Object.fromEntries(PLAYER_IDS.map((id) => [id, null])),
       spectators: new Set(),
       updatedAt: Date.now(),
       emptySince: null,
     });
   }
   return rooms.get(roomId);
+}
+
+function resetRoom(room) {
+  room.state = createInitialGameState(room.id);
+  room.players = Object.fromEntries(PLAYER_IDS.map((id) => [id, null]));
+  room.spectators.clear();
+  room.emptySince = null;
+}
+
+function isPlayerRole(role) {
+  return PLAYER_IDS.includes(role);
+}
+
+function fillCpuSlots(room) {
+  for (const id of PLAYER_IDS) {
+    if (!room.players[id]) {
+      setPlayerCpu(room.state, id, true);
+    }
+  }
 }
 
 function parseMessage(data) {
@@ -276,8 +315,9 @@ async function handleTestApi(req, res) {
   }
 
   if (body.action === 'setScore') {
-    room.state.score.p1 = Number(body.p1 || 0);
-    room.state.score.p2 = Number(body.p2 || 0);
+    for (const id of PLAYER_IDS) {
+      room.state.score[id] = Number(body[id] || 0);
+    }
     broadcastState(room);
     writeJson(res, 200, { ok: true });
     return;
