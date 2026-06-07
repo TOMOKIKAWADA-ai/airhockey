@@ -40,6 +40,8 @@ const PLAYER_COLORS = {
   p4: [COLORS.p4, COLORS.p4Dark],
 };
 
+const DRAG_DEADZONE = 10;
+
 const client = {
   ws: null,
   roomId: '',
@@ -272,7 +274,7 @@ class AirHockeyOnlineScene extends Phaser.Scene {
       align: 'center',
     }).setOrigin(0.5).setDepth(20);
 
-    this.helpText = this.add.text(52, GAME.height - 74, 'Move: WASD / Arrow keys   Power: Shift / Space   R: Restart request', {
+    this.helpText = this.add.text(52, GAME.height - 74, 'Move: WASD / Arrow keys / Drag or touch   Power: Shift / Space   R: Restart request', {
       color: COLORS.mutedText,
       fontFamily: 'Arial, sans-serif',
       fontSize: '13px',
@@ -280,6 +282,12 @@ class AirHockeyOnlineScene extends Phaser.Scene {
   }
 
   createControls() {
+    this.dragControl = {
+      active: false,
+      x: GAME.width / 2,
+      y: GAME.height / 2,
+    };
+
     this.keys = this.input.keyboard.addKeys({
       w: Phaser.Input.Keyboard.KeyCodes.W,
       a: Phaser.Input.Keyboard.KeyCodes.A,
@@ -291,6 +299,22 @@ class AirHockeyOnlineScene extends Phaser.Scene {
       down: Phaser.Input.Keyboard.KeyCodes.DOWN,
       right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+    });
+
+    this.input.on('pointerdown', (pointer) => {
+      this.startDragControl(pointer);
+    });
+    this.input.on('pointermove', (pointer) => {
+      if (this.dragControl.active) this.updateDragTarget(pointer);
+    });
+    this.input.on('pointerup', () => {
+      this.stopDragControl();
+    });
+    this.input.on('pointerupoutside', () => {
+      this.stopDragControl();
+    });
+    window.addEventListener('blur', () => {
+      this.stopDragControl();
     });
   }
 
@@ -324,12 +348,24 @@ class AirHockeyOnlineScene extends Phaser.Scene {
 
   sendInput(nowMs) {
     if (!client.connected || !PLAYER_IDS.includes(client.role)) return;
-    const input = {
+    if (this.dragControl.active && !this.input.activePointer.isDown) {
+      this.stopDragControl();
+    }
+
+    const keyboardInput = {
       up: this.keys.w.isDown || this.keys.up.isDown,
       down: this.keys.s.isDown || this.keys.down.isDown,
       left: this.keys.a.isDown || this.keys.left.isDown,
       right: this.keys.d.isDown || this.keys.right.isDown,
       power: this.keys.shift.isDown || this.keys.space.isDown,
+    };
+    const dragInput = this.dragControl.active ? this.getDragInput() : {};
+    const input = {
+      up: keyboardInput.up || Boolean(dragInput.up),
+      down: keyboardInput.down || Boolean(dragInput.down),
+      left: keyboardInput.left || Boolean(dragInput.left),
+      right: keyboardInput.right || Boolean(dragInput.right),
+      power: keyboardInput.power,
     };
 
     const changed = !client.lastInput || Object.keys(input).some((key) => input[key] !== client.lastInput[key]);
@@ -338,6 +374,35 @@ class AirHockeyOnlineScene extends Phaser.Scene {
       client.lastInputSentAt = nowMs;
       sendMessage({ type: MESSAGE_TYPES.input, input });
     }
+  }
+
+  startDragControl(pointer) {
+    if (!PLAYER_IDS.includes(client.role)) return;
+    this.dragControl.active = true;
+    this.updateDragTarget(pointer);
+  }
+
+  updateDragTarget(pointer) {
+    this.dragControl.x = Phaser.Math.Clamp(pointer.worldX ?? pointer.x, 0, GAME.width);
+    this.dragControl.y = Phaser.Math.Clamp(pointer.worldY ?? pointer.y, 0, GAME.height);
+  }
+
+  stopDragControl() {
+    if (!this.dragControl) return;
+    this.dragControl.active = false;
+  }
+
+  getDragInput() {
+    const player = this.displayState.players[client.role] || client.lastState?.players?.[client.role];
+    if (!player) return {};
+    const dx = this.dragControl.x - player.x;
+    const dy = this.dragControl.y - player.y;
+    return {
+      left: dx < -DRAG_DEADZONE,
+      right: dx > DRAG_DEADZONE,
+      up: dy < -DRAG_DEADZONE,
+      down: dy > DRAG_DEADZONE,
+    };
   }
 
   consumeServerState(nowMs) {

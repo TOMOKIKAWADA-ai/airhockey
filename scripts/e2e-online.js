@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
-import { PLAYER_IDS } from '../src/shared/constants.js';
+import { GAME, PLAYER_IDS } from '../src/shared/constants.js';
 
 const cwd = process.cwd();
 const chromePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
@@ -91,6 +91,22 @@ try {
     assert(Math.abs(after1.players.p2.x - before.players.p2.x) < 5, 'p2 moved from p1 input');
     assert(Math.abs(after1.players.p1.x - after2.players.p1.x) < 5, 'p1 state not synced');
     return `p1.x ${before.players.p1.x.toFixed(1)} -> ${after1.players.p1.x.toFixed(1)}`;
+  });
+
+  await check('p1_drag_moves_paddle_and_syncs', async () => {
+    const before = await gameState(p1);
+    await dragGamePoint(
+      p1,
+      { x: before.players.p1.x, y: before.players.p1.y },
+      { x: before.players.p1.x - 130, y: before.players.p1.y - 35 },
+      320,
+    );
+    const after1 = await gameState(p1);
+    const after2 = await gameState(p2);
+    assert(after1.players.p1.x < before.players.p1.x - 18, 'p1 did not follow drag left');
+    assert(after1.players.p1.y < before.players.p1.y - 8, 'p1 did not follow drag up');
+    assert(Math.abs(after1.players.p1.x - after2.players.p1.x) < 5, 'drag state not synced');
+    return `p1 ${before.players.p1.x.toFixed(1)},${before.players.p1.y.toFixed(1)} -> ${after1.players.p1.x.toFixed(1)},${after1.players.p1.y.toFixed(1)}`;
   });
 
   await check('p3_moves_and_syncs', async () => {
@@ -285,6 +301,34 @@ async function hold(page, key, ms) {
   await delay(ms);
   await page.keyboard.up(key);
   await delay(80);
+}
+
+async function dragGamePoint(page, from, to, ms) {
+  const start = await gameToScreenPoint(page, from);
+  const end = await gameToScreenPoint(page, to);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await delay(ms);
+  await page.mouse.up();
+  await delay(100);
+}
+
+async function gameToScreenPoint(page, point) {
+  const rect = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas');
+    const box = canvas.getBoundingClientRect();
+    return {
+      left: box.left,
+      top: box.top,
+      width: box.width,
+      height: box.height,
+    };
+  });
+  return {
+    x: rect.left + (point.x / GAME.width) * rect.width,
+    y: rect.top + (point.y / GAME.height) * rect.height,
+  };
 }
 
 async function testApi(roomId, body) {

@@ -19,6 +19,9 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 body {
@@ -37,12 +40,14 @@ body {
 #game {
   width: min(100vw - 24px, 100vh - 156px, 900px);
   aspect-ratio: 1 / 1;
+  touch-action: none;
 }
 
 canvas {
   display: block;
   border-radius: 8px;
   box-shadow: 0 22px 72px rgba(0, 0, 0, 0.4);
+  touch-action: none;
 }
 
 .room-panel {
