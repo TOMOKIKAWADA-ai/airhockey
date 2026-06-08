@@ -129,6 +129,25 @@ try {
     return `puck ${s1.puck.x.toFixed(1)},${s1.puck.y.toFixed(1)}`;
   });
 
+  await check('non_goal_escape_recovers_without_stopping', async () => {
+    const before = await gameState(p1);
+    await testApi(roomId, {
+      action: 'placePuck',
+      x: 100,
+      y: 100,
+      vx: -520,
+      vy: -520,
+    });
+    await delay(220);
+    const after1 = await gameState(p1);
+    const after3 = await gameState(p3);
+    assert(after1.status === 'playing', `status changed to ${after1.status}`);
+    assert(after1.debug.puckRecoveries > before.debug.puckRecoveries, 'puck recovery did not run');
+    assert(PLAYER_IDS.every((id) => after1.score[id] === before.score[id]), 'escape should not score');
+    assert(Math.abs(after1.puck.x - after3.puck.x) < 6, 'recovered puck x not synced');
+    return `recovered ${after1.puck.x.toFixed(1)},${after1.puck.y.toFixed(1)}`;
+  });
+
   await check('power_hit_syncs', async () => {
     const before = await gameState(p1);
     await p1.keyboard.down('Shift');

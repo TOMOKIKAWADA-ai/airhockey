@@ -74,6 +74,7 @@ const createDebug = () => ({
   ...Object.fromEntries(PLAYER_IDS.map((id) => [`${id}Goals`, 0])),
   paddleHits: 0,
   wallHits: 0,
+  puckRecoveries: 0,
 });
 
 export function createInitialGameState(roomId = '') {
@@ -374,12 +375,16 @@ function updatePuck(state, deltaMs, nowMs) {
   if (state.status !== 'playing') return;
 
   resolveWallCollisions(state);
+  recoverEscapedPuck(state, nowMs);
   for (const id of PLAYER_IDS) {
     resolvePaddleCollision(state, state.players[id], nowMs);
   }
   correctAxisLock(state.puck);
   capPuckSpeed(state.puck);
   checkGoal(state, nowMs);
+  if (state.status === 'playing') {
+    recoverEscapedPuck(state, nowMs);
+  }
 }
 
 function resolveWallCollisions(state) {
@@ -426,6 +431,99 @@ function resolveSegmentCollision(puck, segment) {
     puck.vy -= 2 * incoming * ny;
   }
   return true;
+}
+
+function recoverEscapedPuck(state, nowMs) {
+  const puck = state.puck;
+  if (isPuckInPlayableCenterArea(puck) || isPuckEnteringGoalMouth(puck)) return false;
+
+  const speed = Math.max(length(puck.vx, puck.vy), TUNING.puckStartSpeed * 0.85);
+  const nearest = nearestPlayableCenterPoint(puck);
+  puck.x = nearest.x;
+  puck.y = nearest.y;
+
+  let nx = MAP.centerX - puck.x;
+  let ny = MAP.centerY - puck.y;
+  const normalLength = length(nx, ny);
+  if (normalLength <= 0.001) {
+    nx = Math.sign(-puck.vx || 1);
+    ny = Math.sign(-puck.vy || 1);
+  } else {
+    nx /= normalLength;
+    ny /= normalLength;
+  }
+
+  puck.vx = nx * speed;
+  puck.vy = ny * speed;
+  correctAxisLock(puck);
+  capPuckSpeed(puck);
+
+  state.debug.wallHits += 1;
+  state.debug.puckRecoveries += 1;
+  pushEvent(state, 'puckRecovered', {
+    at: nowMs,
+    x: puck.x,
+    y: puck.y,
+  });
+  return true;
+}
+
+function isPuckInPlayableCenterArea(puck) {
+  return isPointInRect(puck, verticalPlayableCenterRect()) || isPointInRect(puck, horizontalPlayableCenterRect());
+}
+
+function isPuckEnteringGoalMouth(puck) {
+  const r = TUNING.puckRadius;
+  const m = MAP.margin;
+  return (
+    (isTopBottomGoalLane(puck) && (puck.y < m + r || puck.y > GAME.height - m - r)) ||
+    (isLeftRightGoalLane(puck) && (puck.x < m + r || puck.x > GAME.width - m - r))
+  );
+}
+
+function nearestPlayableCenterPoint(puck) {
+  const vertical = closestPointToRect(puck, verticalPlayableCenterRect());
+  const horizontal = closestPointToRect(puck, horizontalPlayableCenterRect());
+  const verticalDistance = squaredDistance(puck, vertical);
+  const horizontalDistance = squaredDistance(puck, horizontal);
+  return verticalDistance <= horizontalDistance ? vertical : horizontal;
+}
+
+function verticalPlayableCenterRect() {
+  const r = TUNING.puckRadius;
+  return {
+    minX: MAP.leftArmX + r,
+    maxX: MAP.rightArmX - r,
+    minY: MAP.margin + r,
+    maxY: GAME.height - MAP.margin - r,
+  };
+}
+
+function horizontalPlayableCenterRect() {
+  const r = TUNING.puckRadius;
+  return {
+    minX: MAP.margin + r,
+    maxX: GAME.width - MAP.margin - r,
+    minY: MAP.topArmY + r,
+    maxY: MAP.bottomArmY - r,
+  };
+}
+
+function isPointInRect(point, rect) {
+  return point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY;
+}
+
+function closestPointToRect(point, rect) {
+  return {
+    x: clamp(point.x, rect.minX, rect.maxX),
+    y: clamp(point.y, rect.minY, rect.maxY),
+  };
+}
+
+function squaredDistance(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
 }
 
 function resolvePaddleCollision(state, paddle, nowMs) {
